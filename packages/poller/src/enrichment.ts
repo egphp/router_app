@@ -52,8 +52,13 @@ export class EnrichmentWorker {
         attempts    = device_enrichment.attempts + 1
     `);
     // Pick devices that have never been enriched, OR whose enrichment is stale.
+    // IP is pulled from the latest samples_raw row for that mac.
     this.getNext = db.prepare(`
-      SELECT d.mac, d.ip, d.hostname, d.vendor
+      SELECT
+        d.mac,
+        (SELECT ip FROM samples_raw WHERE mac = d.mac ORDER BY ts DESC LIMIT 1) AS ip,
+        d.hostname,
+        d.vendor
       FROM devices d
       LEFT JOIN device_enrichment e ON e.mac = d.mac
       WHERE e.next_check IS NULL OR e.next_check < ?
