@@ -14,8 +14,8 @@ import { ConcurrentChart } from './ConcurrentChart';
 import { AnomaliesCard } from './AnomaliesCard';
 import { TelemetryCard } from './TelemetryCard';
 import { TelemetryBar } from './TelemetryBar';
-import { formatBytes, formatDuration } from '../lib/format';
-import { Activity, Download, Bell, Crown, GripVertical, RotateCcw, Lock, Unlock } from 'lucide-react';
+import { formatBytes, formatDuration, categoryIcon } from '../lib/format';
+import { Activity, Download, Bell, Crown, GripVertical, RotateCcw, Lock, Unlock, PieChart } from 'lucide-react';
 
 interface TopDevice { mac: string; label: string; bytes_down: number }
 interface Status {
@@ -30,9 +30,9 @@ interface Status {
   alerts: number;
 }
 
-type WidgetId = 'overview' | 'top-talkers' | 'category' | 'concurrent' | 'anomalies' | 'devices';
+type WidgetId = 'live-speed' | 'top-talkers' | 'category-chart' | 'concurrent' | 'anomalies' | 'devices';
 
-const DEFAULT_ORDER: WidgetId[] = ['overview', 'top-talkers', 'category', 'concurrent', 'anomalies', 'devices'];
+const DEFAULT_ORDER: WidgetId[] = ['live-speed', 'top-talkers', 'category-chart', 'concurrent', 'anomalies', 'devices'];
 const STORAGE_KEY = 'tenda.dashboardOrder.v1';
 const EDIT_KEY = 'tenda.dashboardEdit.v1';
 
@@ -54,9 +54,9 @@ function loadOrder(): WidgetId[] {
 }
 
 const WIDGET_LABELS: Record<WidgetId, string> = {
-  overview: 'Overview (stats + live speed)',
+  'live-speed': 'Live speed chart',
   'top-talkers': 'Top talkers',
-  category: 'Traffic by category',
+  'category-chart': 'Category breakdown chart',
   concurrent: 'Concurrent devices',
   anomalies: 'Anomalies',
   devices: 'Devices table',
@@ -125,38 +125,11 @@ export function Dashboard() {
 
   const renderWidget = (id: WidgetId) => {
     switch (id) {
-      case 'overview':
-        return (
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-3 sm:gap-4">
-            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 self-start">
-              <StatCard
-                label="Router uptime"
-                value={formatDuration(status?.uptime_sec ?? 0)}
-                hint={status ? `${status.online_count} online of ${status.total_devices} known` : '...'}
-                icon={<Activity size={16} />}
-                tone={status?.connected ? 'green' : 'red'}
-              />
-              <StatCard
-                label="Today (download)"
-                value={formatBytes(status?.bytes_today_down ?? 0)}
-                hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
-                icon={<Download size={16} />}
-              />
-              <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
-              <StatCard
-                label="Active alerts"
-                value={status?.alerts ?? 0}
-                hint={status?.alerts ? 'see Alerts page' : 'all clear'}
-                icon={<Bell size={16} />}
-                tone={status && status.alerts > 0 ? 'red' : 'default'}
-              />
-            </div>
-            <LiveSpeedChart />
-          </div>
-        );
+      case 'live-speed':
+        return <LiveSpeedChart />;
       case 'top-talkers':
         return <TopTalkers />;
-      case 'category':
+      case 'category-chart':
         return <CategoryBreakdown />;
       case 'concurrent':
         return <ConcurrentChart />;
@@ -173,6 +146,32 @@ export function Dashboard() {
       <NsfwBanner />
       <AlertBanner />
       <TelemetryBar />
+
+      {/* Fixed status row — always first, not reorderable */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+        <StatCard
+          label="Router uptime"
+          value={formatDuration(status?.uptime_sec ?? 0)}
+          hint={status ? `${status.online_count} online of ${status.total_devices} known` : '...'}
+          icon={<Activity size={16} />}
+          tone={status?.connected ? 'green' : 'red'}
+        />
+        <StatCard
+          label="Today (download)"
+          value={formatBytes(status?.bytes_today_down ?? 0)}
+          hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
+          icon={<Download size={16} />}
+        />
+        <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
+        <StatCard
+          label="Active alerts"
+          value={status?.alerts ?? 0}
+          hint={status?.alerts ? 'see Alerts page' : 'all clear'}
+          icon={<Bell size={16} />}
+          tone={status && status.alerts > 0 ? 'red' : 'default'}
+        />
+        <CategoryStatCard />
+      </div>
 
       {/* Edit toolbar */}
       <div className="flex items-center justify-end gap-2 -mb-2">
@@ -264,6 +263,46 @@ function TopDevicesCard({ top, second }: { top: TopDevice | null; second: TopDev
             </div>
           ),
         )}
+      </div>
+    </div>
+  );
+}
+
+interface CategoryRow { category: string; bytes_down: number; bytes_up: number; device_count: number }
+
+function CategoryStatCard() {
+  const { data } = useSWR<{ data: CategoryRow[] }>('/api/analytics?kind=categories&range=today', fetcher, { refreshInterval: 30000 });
+  const rows = data?.data ?? [];
+  const total = rows.reduce((s, r) => s + r.bytes_down + r.bytes_up, 0);
+  const top3 = rows.slice(0, 3);
+  return (
+    <div className="card p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="stat-label truncate">Traffic by category</div>
+        <div className="shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500/25 to-blue-700/10 ring-1 ring-cyan-500/30 flex items-center justify-center">
+          <PieChart size={16} className="text-slate-100" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        {top3.length === 0 ? (
+          <div className="text-sm text-slate-500">no data</div>
+        ) : top3.map((r) => {
+          const pct = total > 0 ? ((r.bytes_down + r.bytes_up) / total) * 100 : 0;
+          return (
+            <div key={r.category} className="flex items-center gap-2 text-xs">
+              <span className="text-base shrink-0">{categoryIcon(r.category)}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-slate-200 truncate capitalize">{r.category}</span>
+                  <span className="text-slate-400 tabular-nums shrink-0">{formatBytes(r.bytes_down + r.bytes_up, 0)}</span>
+                </div>
+                <div className="h-1 bg-bg-border rounded mt-0.5 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-cyan-400 to-blue-500" style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
