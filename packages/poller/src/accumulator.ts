@@ -142,9 +142,12 @@ export class Accumulator {
         } else {
           const rawDeltaKb = downSumKb - prev.down_sum_kb;
           if (rawDeltaKb < 0) {
-            // Counter went backwards without an uptime regression — likely a partial reset or
-            // device-side counter wrap. Trust the new value as bytes since the reset.
-            deltaDownBytes = downSumKb * 1024;
+            // Counter went backwards without a router reboot. Tenda zeroes per-device counters
+            // on session/lease events even while the device stays online. Credit prev's value
+            // (what was downloaded up to the regression) PLUS whatever's accumulated since:
+            //   prev=263, curr=0  → credit 263 KB (the regression itself, lost otherwise)
+            //   prev=200, curr=50 → credit 50 KB (treat curr as bytes since reset)
+            deltaDownBytes = (prev.down_sum_kb + downSumKb) * 1024;
           } else if (rawDeltaKb > 50 * 1024 * 1024) {
             // Sanity cap: > 50GB in one cycle is implausible
             log.warn('accumulator: implausible delta clamped', { mac, rawDeltaKb });

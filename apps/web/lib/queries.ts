@@ -476,6 +476,7 @@ export function getCategoryBreakdown(range: 'today' | 'week' | 'month' = 'today'
  */
 export function getConsumption(): Array<{
   mac: string; label: string; category: string | null; vendor: string | null;
+  now_down_bps: number; now_up_bps: number; online: 0 | 1;
   today_down: number; today_up: number;
   week_down: number; week_up: number;
   month_down: number; month_up: number;
@@ -502,12 +503,25 @@ export function getConsumption(): Array<{
   const all = bytesAggregate(0);
 
   const devices = db().prepare(`
-    SELECT mac, COALESCE(custom_label, router_remark, hostname, mac) AS label, category, vendor
-    FROM devices ORDER BY last_seen DESC
-  `).all() as Array<{ mac: string; label: string; category: string | null; vendor: string | null }>;
+    SELECT d.mac, COALESCE(d.custom_label, d.router_remark, d.hostname, d.mac) AS label,
+           d.category, d.vendor,
+           COALESCE(s.online, 0) AS online,
+           COALESCE(s.down_speed_bps, 0) AS now_down_bps,
+           COALESCE(s.up_speed_bps, 0) AS now_up_bps
+    FROM devices d
+    LEFT JOIN (
+      SELECT mac, ip, online, down_speed_bps, up_speed_bps
+      FROM samples_raw sr
+      WHERE ts = (SELECT MAX(ts) FROM samples_raw WHERE mac = sr.mac)
+    ) s ON s.mac = d.mac
+    ORDER BY d.last_seen DESC
+  `).all() as Array<{ mac: string; label: string; category: string | null; vendor: string | null; online: 0 | 1; now_down_bps: number; now_up_bps: number }>;
 
   return devices.map((d) => ({
     mac: d.mac, label: d.label, category: d.category, vendor: d.vendor,
+    online: (d.online ?? 0) as 0 | 1,
+    now_down_bps: Number(d.now_down_bps ?? 0),
+    now_up_bps: Number(d.now_up_bps ?? 0),
     today_down: today.byMac.get(d.mac)?.bd ?? 0,
     today_up: today.byMac.get(d.mac)?.bu ?? 0,
     week_down: week.byMac.get(d.mac)?.bd ?? 0,
@@ -670,6 +684,50 @@ export function getDeviceAttacks(mac: string) {
     FROM router_syslog WHERE attacker_mac = ? AND log_type = 2 ORDER BY ts DESC LIMIT 30
   `).all(macUp);
   return { summary, recent };
+}
+
+/** Per-day usage for a device (last N days). Returns one row per day with bytes down/up + total. */
+export function getDeviceDailyUsage(mac: string, days = 30): Array<{
+  day_ts: number; day_label: string; bytes_down: number; bytes_up: number; total: number;
+}> {
+  const conn = db();
+  const today = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  const since = today - (days - 1) * DAY;
+
+  // Combine traffic_5min + traffic_hour + traffic_day, bucketed by day boundary
+  const rows = conn.prepare(`
+    WITH per_day AS (
+      SELECT (CAST(bucket_ts / 86400000 AS INTEGER) * 86400000) AS day_ts,
+             SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
+      FROM traffic_5min WHERE mac = ? AND bucket_ts >= ?
+      GROUP BY day_ts
+      UNION ALL
+      SELECT (CAST(bucket_ts / 86400000 AS INTEGER) * 86400000) AS day_ts,
+             SUM(bytes_down), SUM(bytes_up)
+      FROM traffic_hour WHERE mac = ? AND bucket_ts >= ?
+      GROUP BY day_ts
+      UNION ALL
+      SELECT bucket_ts AS day_ts, SUM(bytes_down), SUM(bytes_up)
+      FROM traffic_day WHERE mac = ? AND bucket_ts >= ?
+      GROUP BY day_ts
+    )
+    SELECT day_ts, SUM(bd) AS bytes_down, SUM(bu) AS bytes_up
+    FROM per_day
+    GROUP BY day_ts
+    ORDER BY day_ts DESC
+  `).all(mac, since, mac, since, mac, since) as Array<{ day_ts: number; bytes_down: number; bytes_up: number }>;
+
+  return rows.map((r) => {
+    const d = new Date(r.day_ts);
+    const day_label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    return {
+      day_ts: r.day_ts,
+      day_label,
+      bytes_down: Number(r.bytes_down ?? 0),
+      bytes_up: Number(r.bytes_up ?? 0),
+      total: Number(r.bytes_down ?? 0) + Number(r.bytes_up ?? 0),
+    };
+  });
 }
 
 export function getDeviceStats(mac: string) {

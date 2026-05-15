@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
 import { formatBps, formatBytes, formatMacShort, categoryIcon, timeAgo } from '../lib/format';
+import { usePersistedState } from '../lib/usePersistedState';
 import { clsx } from 'clsx';
 
 interface DeviceRow {
@@ -31,8 +32,8 @@ type Filter = 'all' | 'online' | 'offline' | 'new';
 
 export function DeviceTable() {
   const { data, mutate } = useSWR<{ devices: DeviceRow[] }>('/api/devices', fetcher, { refreshInterval: 10000 });
-  const [sort, setSort] = useState<SortKey>('today');
-  const [filter, setFilter] = useState<Filter>('all');
+  const [sort, setSort] = usePersistedState<SortKey>('tenda.devices.sort', 'today');
+  const [filter, setFilter] = usePersistedState<Filter>('tenda.devices.filter', 'all');
   const [search, setSearch] = useState('');
 
   const devices = useMemo(() => {
@@ -92,11 +93,11 @@ export function DeviceTable() {
           <option value="offline">Offline</option><option value="new">New</option>
         </select>
         <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
-          className="bg-bg-elevated border border-bg-border rounded-md px-2 py-1.5 text-xs sm:text-sm">
+          className="lg:hidden bg-bg-elevated border border-bg-border rounded-md px-2 py-1.5 text-xs sm:text-sm">
           <option value="today">Sort: today</option>
           <option value="total">Sort: total</option>
-          <option value="down">Sort: ↓ speed</option>
-          <option value="up">Sort: ↑ speed</option>
+          <option value="down">Sort: ↓ now</option>
+          <option value="up">Sort: ↑ now</option>
           <option value="name">Sort: name</option>
           <option value="last_seen">Sort: last seen</option>
         </select>
@@ -150,13 +151,12 @@ export function DeviceTable() {
         <table className="w-full text-sm">
           <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
             <tr>
-              <th className="px-4 py-2 text-left">Device</th>
+              <SortableTh label="Device" k="name" sort={sort} setSort={setSort} align="left" />
               <th className="px-4 py-2 text-left">Address</th>
-              <th className="px-4 py-2 text-right">↓ now</th>
-              <th className="px-4 py-2 text-right">↑ now</th>
-              <th className="px-4 py-2 text-right">Today</th>
-              <th className="px-4 py-2 text-right">All-time</th>
-              <th className="px-4 py-2 text-right">Last seen</th>
+              <SortableTh label="Now" k="down" altK="up" sort={sort} setSort={setSort} hint="click: ↓ / ↑" />
+              <SortableTh label="Today" k="today" sort={sort} setSort={setSort} />
+              <SortableTh label="All-time" k="total" sort={sort} setSort={setSort} />
+              <SortableTh label="Last seen" k="last_seen" sort={sort} setSort={setSort} />
               <th className="px-4 py-2"></th>
             </tr>
           </thead>
@@ -184,19 +184,17 @@ export function DeviceTable() {
                   <div className="text-slate-300">{d.ip ?? '—'}</div>
                   <div className="text-xs text-slate-500">{formatMacShort(d.mac)}</div>
                 </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  <span className={d.online && d.down_speed_bps > 0 ? 'text-blue-400' : 'text-slate-500'}>
-                    {d.online ? formatBps(d.down_speed_bps) : <span className="text-slate-600">offline</span>}
-                  </span>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums', (sort==='down'||sort==='up') && 'bg-accent/5')}>
+                  {d.online ? (
+                    <div className="leading-tight">
+                      <div className={d.down_speed_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>↓ {formatBps(d.down_speed_bps)}</div>
+                      <div className={d.up_speed_bps > 0 ? 'text-orange-400 text-xs' : 'text-slate-600 text-xs'}>↑ {formatBps(d.up_speed_bps)}</div>
+                    </div>
+                  ) : <span className="text-slate-600">offline</span>}
                 </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  <span className={d.online && d.up_speed_bps > 0 ? 'text-orange-400' : 'text-slate-500'}>
-                    {d.online ? formatBps(d.up_speed_bps) : '—'}
-                  </span>
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatBytes(d.bytes_today)}</td>
-                <td className="px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold">{formatBytes(d.bytes_total)}</td>
-                <td className="px-4 py-2.5 text-right text-xs text-slate-500">{timeAgo(d.last_seen)}</td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort==='today' && 'bg-accent/5 font-semibold')}>{formatBytes(d.bytes_today)}</td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort==='total' && 'bg-accent/5')}>{formatBytes(d.bytes_total)}</td>
+                <td className={clsx('px-4 py-2.5 text-right text-xs text-slate-500', sort==='last_seen' && 'bg-accent/5')}>{timeAgo(d.last_seen)}</td>
                 <td className="px-4 py-2.5 text-right">
                   {d.is_new === 1 && (
                     <button onClick={() => dismissNew(d.mac)}
@@ -219,4 +217,29 @@ export function DeviceTable() {
 
 function label(d: { custom_label: string | null; hostname: string | null; router_remark: string | null; mac: string }): string {
   return d.custom_label || d.router_remark || d.hostname || d.mac;
+}
+
+function SortableTh({ label, k, altK, sort, setSort, align = 'right', hint }: {
+  label: string; k: SortKey; altK?: SortKey; sort: SortKey; setSort: (s: SortKey) => void;
+  align?: 'left' | 'right'; hint?: string;
+}) {
+  const active = sort === k || sort === altK;
+  const arrow = sort === k ? ' ↓' : sort === altK ? ' ↑' : '';
+  const onClick = () => {
+    if (!altK) { setSort(k); return; }
+    setSort(sort === k ? altK : k);
+  };
+  return (
+    <th
+      onClick={onClick}
+      title={hint ?? `Sort by ${label}`}
+      className={clsx(
+        'px-4 py-2 cursor-pointer select-none hover:text-slate-200 transition',
+        align === 'left' ? 'text-left' : 'text-right',
+        active && 'text-accent'
+      )}
+    >
+      {label}{arrow}
+    </th>
+  );
 }

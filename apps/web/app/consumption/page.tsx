@@ -3,10 +3,12 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
-import { formatBytes, categoryIcon } from '../../lib/format';
+import { formatBytes, formatBps, categoryIcon } from '../../lib/format';
+import { usePersistedState } from '../../lib/usePersistedState';
 
 interface Row {
   mac: string; label: string; category: string | null; vendor: string | null;
+  online: 0 | 1; now_down_bps: number; now_up_bps: number;
   today_down: number; today_up: number;
   week_down: number; week_up: number;
   month_down: number; month_up: number;
@@ -14,6 +16,7 @@ interface Row {
   total_down: number; total_up: number;
 }
 
+type SortKey = 'now_down' | 'now_up' | 'today' | 'week' | 'month' | 'year' | 'total';
 type Period = 'today' | 'week' | 'month' | 'year' | 'total';
 const PERIODS: { value: Period; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -24,9 +27,9 @@ const PERIODS: { value: Period; label: string }[] = [
 ];
 
 export default function ConsumptionPage() {
-  const { data } = useSWR<{ devices: Row[] }>('/api/consumption', fetcher, { refreshInterval: 15000 });
+  const { data } = useSWR<{ devices: Row[] }>('/api/consumption', fetcher, { refreshInterval: 10000 });
   const rows = data?.devices ?? [];
-  const [sortPeriod, setSortPeriod] = useState<Period>('today');
+  const [sort, setSort] = usePersistedState<SortKey>('tenda.consumption.sort', 'today');
   const [search, setSearch] = useState('');
 
   const sorted = useMemo(() => {
@@ -38,9 +41,13 @@ export default function ConsumptionPage() {
         (r.vendor || '').toLowerCase().includes(q)
       );
     }
-    list.sort((a, b) => (b[`${sortPeriod}_down`] + b[`${sortPeriod}_up`]) - (a[`${sortPeriod}_down`] + a[`${sortPeriod}_up`]));
+    list.sort((a, b) => {
+      if (sort === 'now_down') return b.now_down_bps - a.now_down_bps;
+      if (sort === 'now_up') return b.now_up_bps - a.now_up_bps;
+      return (b[`${sort}_down`] + b[`${sort}_up`]) - (a[`${sort}_down`] + a[`${sort}_up`]);
+    });
     return list;
-  }, [rows, sortPeriod, search]);
+  }, [rows, sort, search]);
 
   // Totals row
   const totals = useMemo(() => sorted.reduce((acc, r) => ({
@@ -51,6 +58,8 @@ export default function ConsumptionPage() {
     total: acc.total + r.total_down + r.total_up,
   }), { today: 0, week: 0, month: 0, year: 0, total: 0 }), [sorted]);
 
+  const sortPeriod: Period = (sort === 'now_down' || sort === 'now_up') ? 'today' : sort;
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -58,8 +67,10 @@ export default function ConsumptionPage() {
         <div className="flex items-center gap-2">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…"
             className="bg-bg-elevated border border-bg-border rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-accent" />
-          <select value={sortPeriod} onChange={(e) => setSortPeriod(e.target.value as Period)}
-            className="bg-bg-elevated border border-bg-border rounded px-2 py-1.5 text-sm">
+          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
+            className="lg:hidden bg-bg-elevated border border-bg-border rounded px-2 py-1.5 text-sm">
+            <option value="now_down">Sort: ↓ now</option>
+            <option value="now_up">Sort: ↑ now</option>
             {PERIODS.map((p) => <option key={p.value} value={p.value}>Sort by {p.label}</option>)}
           </select>
         </div>
@@ -70,7 +81,7 @@ export default function ConsumptionPage() {
           const v = totals[p.value as keyof typeof totals];
           const active = sortPeriod === p.value;
           return (
-            <button key={p.value} onClick={() => setSortPeriod(p.value)}
+            <button key={p.value} onClick={() => setSort(p.value)}
               className={`card p-4 text-left transition ${active ? 'border-accent ring-1 ring-accent/40' : 'hover:border-bg-border'}`}>
               <div className="stat-label">Network · {p.label}</div>
               <div className="text-xl font-bold mt-1 tabular-nums">{formatBytes(v)}</div>
@@ -91,8 +102,11 @@ export default function ConsumptionPage() {
                 <div className="text-[10px] text-slate-500 truncate">{r.mac}</div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-[10px] text-slate-500">{PERIODS.find((p) => p.value === sortPeriod)?.label}</div>
-                <div className="text-sm font-bold tabular-nums text-slate-100">{formatBytes((r as any)[`${sortPeriod}_down`] + (r as any)[`${sortPeriod}_up`])}</div>
+                <div className="text-[10px] text-slate-500">{r.online ? 'now' : 'offline'}</div>
+                <div className="text-xs tabular-nums leading-tight">
+                  <span className="text-blue-400">↓ {formatBps(r.now_down_bps)}</span>{' '}
+                  <span className="text-orange-400">↑ {formatBps(r.now_up_bps)}</span>
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-5 gap-1 mt-2 text-[10px]">
@@ -115,11 +129,12 @@ export default function ConsumptionPage() {
             <thead className="bg-bg-elevated/40 text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-2 text-left">Device</th>
-                <th className="px-3 py-2 text-right">Today</th>
-                <th className="px-3 py-2 text-right">Week</th>
-                <th className="px-3 py-2 text-right">Month</th>
-                <th className="px-3 py-2 text-right">Year</th>
-                <th className="px-3 py-2 text-right">All-time</th>
+                <Th label="Now" k="now_down" altK="now_up" sort={sort} setSort={setSort} hint="click: ↓ / ↑" />
+                <Th label="Today" k="today" sort={sort} setSort={setSort} />
+                <Th label="Week" k="week" sort={sort} setSort={setSort} />
+                <Th label="Month" k="month" sort={sort} setSort={setSort} />
+                <Th label="Year" k="year" sort={sort} setSort={setSort} />
+                <Th label="All-time" k="total" sort={sort} setSort={setSort} />
               </tr>
             </thead>
             <tbody>
@@ -135,15 +150,23 @@ export default function ConsumptionPage() {
                       </div>
                     </Link>
                   </td>
-                  <ConsumptionCell down={r.today_down} up={r.today_up} highlight={sortPeriod === 'today'} />
-                  <ConsumptionCell down={r.week_down} up={r.week_up} highlight={sortPeriod === 'week'} />
-                  <ConsumptionCell down={r.month_down} up={r.month_up} highlight={sortPeriod === 'month'} />
-                  <ConsumptionCell down={r.year_down} up={r.year_up} highlight={sortPeriod === 'year'} />
-                  <ConsumptionCell down={r.total_down} up={r.total_up} highlight={sortPeriod === 'total'} />
+                  <td className={`px-3 py-2.5 text-right tabular-nums leading-tight ${(sort==='now_down'||sort==='now_up') ? 'bg-accent/5' : ''}`}>
+                    {r.online ? (
+                      <>
+                        <div className={r.now_down_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>↓ {formatBps(r.now_down_bps)}</div>
+                        <div className={`text-xs ${r.now_up_bps > 0 ? 'text-orange-400' : 'text-slate-600'}`}>↑ {formatBps(r.now_up_bps)}</div>
+                      </>
+                    ) : <span className="text-slate-600 text-xs">offline</span>}
+                  </td>
+                  <ConsumptionCell down={r.today_down} up={r.today_up} highlight={sort === 'today'} />
+                  <ConsumptionCell down={r.week_down} up={r.week_up} highlight={sort === 'week'} />
+                  <ConsumptionCell down={r.month_down} up={r.month_up} highlight={sort === 'month'} />
+                  <ConsumptionCell down={r.year_down} up={r.year_up} highlight={sort === 'year'} />
+                  <ConsumptionCell down={r.total_down} up={r.total_up} highlight={sort === 'total'} />
                 </tr>
               ))}
               {sorted.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">No devices.</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">No devices.</td></tr>
               )}
             </tbody>
           </table>
@@ -153,10 +176,31 @@ export default function ConsumptionPage() {
   );
 }
 
+function Th({ label, k, altK, sort, setSort, hint }: {
+  label: string; k: SortKey; altK?: SortKey; sort: SortKey;
+  setSort: (s: SortKey) => void; hint?: string;
+}) {
+  const active = sort === k || sort === altK;
+  const arrow = sort === k ? ' ↓' : sort === altK ? ' ↑' : '';
+  const onClick = () => {
+    if (!altK) { setSort(k); return; }
+    setSort(sort === k ? altK : k);
+  };
+  return (
+    <th
+      onClick={onClick}
+      title={hint ?? `Sort by ${label}`}
+      className={`px-3 py-2 text-right cursor-pointer select-none hover:text-slate-200 transition ${active ? 'text-accent' : ''}`}
+    >
+      {label}{arrow}
+    </th>
+  );
+}
+
 function ConsumptionCell({ down, up, highlight }: { down: number; up: number; highlight?: boolean }) {
   const total = down + up;
   return (
-    <td className={`px-3 py-2.5 text-right tabular-nums ${highlight ? 'font-semibold text-slate-100' : 'text-slate-300'}`}>
+    <td className={`px-3 py-2.5 text-right tabular-nums ${highlight ? 'font-semibold text-slate-100 bg-accent/5' : 'text-slate-300'}`}>
       <div>{formatBytes(total)}</div>
       <div className="text-[10px] text-slate-500">↓{formatBytes(down, 0)} ↑{formatBytes(up, 0)}</div>
     </td>

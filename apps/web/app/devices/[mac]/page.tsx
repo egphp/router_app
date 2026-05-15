@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { getDevice, getDeviceStats } from '../../../lib/queries';
+import { getDevice, getDeviceStats, getDeviceDailyUsage } from '../../../lib/queries';
 import { DeviceDetailClient } from '../../../components/DeviceDetailClient';
 
 export const dynamic = 'force-dynamic';
@@ -10,5 +10,6 @@ export default async function DeviceDetailPage({ params }: { params: Promise<{ m
   const device = getDevice(macUp);
   if (!device) notFound();
   const stats = getDeviceStats(macUp);
-  return <DeviceDetailClient device={device as any} initialStats={stats} />;
+  const dailyUsage = getDeviceDailyUsage(macUp, 30);
+  return <DeviceDetailClient device={device as any} initialStats={stats} dailyUsage={dailyUsage} />;
 }

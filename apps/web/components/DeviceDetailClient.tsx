@@ -30,9 +30,12 @@ interface Device {
   notes: string | null;
 }
 
-export function DeviceDetailClient({ device, initialStats }: {
+interface DailyRow { day_ts: number; day_label: string; bytes_down: number; bytes_up: number; total: number; }
+
+export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
   device: Device;
   initialStats: { bytes_down: number; bytes_up: number; peak_down_bps: number; peak_up_bps: number };
+  dailyUsage: DailyRow[];
 }) {
   const [range, setRange] = useState<Range>('today');
   const [editing, setEditing] = useState(false);
@@ -234,6 +237,70 @@ export function DeviceDetailClient({ device, initialStats }: {
           </ResponsiveContainer>
         </div>
       </div>
+
+      <DailyComparison rows={dailyUsage} />
+    </div>
+  );
+}
+
+function DailyComparison({ rows }: { rows: DailyRow[] }) {
+  const max = Math.max(1, ...rows.map((r) => r.total));
+  return (
+    <div className="card p-5">
+      <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+        <div className="stat-label">Day-by-day comparison</div>
+        <div className="text-xs text-slate-500">{rows.length} days · click row to compare</div>
+      </div>
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500 py-4">No daily data yet.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-2 py-2 text-left">Day</th>
+                <th className="px-2 py-2 text-right">↓ Down</th>
+                <th className="px-2 py-2 text-right">↑ Up</th>
+                <th className="px-2 py-2 text-right">Total</th>
+                <th className="px-2 py-2 text-right">vs prev</th>
+                <th className="px-2 py-2 w-32">Relative</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const prev = rows[i + 1];
+                const delta = prev ? r.total - prev.total : null;
+                const pct = prev && prev.total > 0 ? Math.round(((r.total - prev.total) / prev.total) * 100) : null;
+                const isToday = i === 0;
+                const barPct = Math.round((r.total / max) * 100);
+                return (
+                  <tr key={r.day_ts} className={`border-t border-bg-border ${isToday ? 'bg-accent/5' : ''}`}>
+                    <td className="px-2 py-2.5 whitespace-nowrap">
+                      <div className={isToday ? 'font-semibold text-slate-100' : 'text-slate-300'}>{r.day_label}</div>
+                      {isToday && <div className="text-[10px] text-accent">today</div>}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-blue-400">{formatBytes(r.bytes_down)}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-orange-400">{formatBytes(r.bytes_up)}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums font-semibold text-slate-100">{formatBytes(r.total)}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums">
+                      {delta === null ? <span className="text-slate-600">—</span> : (
+                        <span className={delta > 0 ? 'text-accent-red' : delta < 0 ? 'text-accent-green' : 'text-slate-500'}>
+                          {delta > 0 ? '+' : ''}{formatBytes(Math.abs(delta))} {pct !== null && <span className="text-[10px]">({pct > 0 ? '+' : ''}{pct}%)</span>}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <div className="h-2 bg-bg-elevated rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-blue-500 to-purple-500" style={{ width: `${barPct}%` }} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

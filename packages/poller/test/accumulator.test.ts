@@ -61,12 +61,22 @@ test('reboot detected → counter starts fresh, full sum counted', () => {
   assert.equal(r.totalBytesDownDelta, 500 * 1024, 'after reboot we add full new sum');
 });
 
-test('counter regression without reboot flag also treated like reboot', () => {
+test('counter regression credits prev value + new (per-session zero, prev would be lost)', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
   acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 50_000 })], false);
   const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 200 })], false);
-  assert.equal(r.totalBytesDownDelta, 200 * 1024);
+  // prev=50000 (would be lost if we only credit curr), curr=200 → total 50200 KB
+  assert.equal(r.totalBytesDownDelta, 50_200 * 1024);
+});
+
+test('counter reset to exactly 0 credits prev value (real-world Tenda behavior)', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 263 })], false);
+  const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 0 })], false);
+  // The 263 KB the device downloaded just before the zero MUST be credited
+  assert.equal(r.totalBytesDownDelta, 263 * 1024);
 });
 
 test('implausibly large delta clamped to 0 with warning', () => {
@@ -132,5 +142,20 @@ test('full reboot scenario: data preserved across counter reset', () => {
   const total = (db.prepare(`SELECT SUM(bytes_down) AS s FROM traffic_5min WHERE mac = 'AA:00:00:00:00:01'`).get() as any).s;
   // Expected: 0 (first) + 100K (delta) + 100K (delta) + 50K (reboot baseline added) + 100K (delta) = 350K bytes worth
   const expected = (0 + 100 + 100 + 50 + 100) * 1024;
+  assert.equal(total, expected, `expected ${expected} bytes, got ${total}`);
+});
+
+test('per-session zero (no reboot): prev value preserved across reset', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  // Real-world: device accumulates, then router zeros the per-device counter
+  acc.process(1_000_000, [device('AA:00:00:00:00:01', { sumKb: 100 })], false);
+  acc.process(1_030_000, [device('AA:00:00:00:00:01', { sumKb: 263 })], false);  // +163K
+  acc.process(1_060_000, [device('AA:00:00:00:00:01', { sumKb: 0 })], false);    // reset → credit 263K
+  acc.process(1_090_000, [device('AA:00:00:00:00:01', { sumKb: 50 })], false);   // +50K
+
+  const total = (db.prepare(`SELECT SUM(bytes_down) AS s FROM traffic_5min WHERE mac = 'AA:00:00:00:00:01'`).get() as any).s;
+  // Expected: 0 (first) + 163K + 263K (reset preserved prev) + 50K = 476K
+  const expected = (0 + 163 + 263 + 50) * 1024;
   assert.equal(total, expected, `expected ${expected} bytes, got ${total}`);
 });
