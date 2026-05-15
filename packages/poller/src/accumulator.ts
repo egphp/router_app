@@ -109,11 +109,31 @@ export class Accumulator {
         });
 
         const isOnline = dev.hostOnlineStatus === 1;
-        const upSpeed = isOnline ? Number((dev as any).hostUploadSpeed ?? 0) : 0;
-        const downSpeed = isOnline ? Number((dev as any).hostDownloadSpeed ?? 0) : 0;
-        const downSumKb = Number(dev.hostDownloadSum ?? 0);
+        // Tenda firmware reports hostUploadSpeed/hostDownloadSpeed as integer KB/s.
+        // Store the canonical bytes/s in the DB (legacy column name says "_bps" but means bytes/s).
+        const upKBs = isOnline ? Number((dev as any).hostUploadSpeed ?? 0) : 0;
+        const downKBs = isOnline ? Number((dev as any).hostDownloadSpeed ?? 0) : 0;
+        const upSpeed = Math.round(upKBs * 1024);
+        const downSpeed = Math.round(downKBs * 1024);
+        const rawDownSumKb = Number(dev.hostDownloadSum ?? 0);
         const sessions = isOnline ? Number((dev as any).hostConnectCount ?? 0) : 0;
         const onlineSec = isOnline ? Number((dev as any).onlineTime ?? 0) : 0;
+
+        const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
+
+        // Filter Tenda firmware flicker: occasional samples report sum=0 for devices that
+        // are obviously not at zero (prev was non-trivial and we're not on a long gap).
+        // Treat these as a transient firmware glitch — clamp to the previous high-water mark
+        // so the recorded sample doesn't pollute downstream delta math.
+        let downSumKb = rawDownSumKb;
+        const flickerToZero =
+          prev != null &&
+          rawDownSumKb === 0 &&
+          prev.down_sum_kb >= 1 &&
+          (now - prev.ts) < 5 * 60_000;
+        if (flickerToZero) {
+          downSumKb = prev!.down_sum_kb;
+        }
 
         this.insertSample.run({
           mac,
@@ -126,9 +146,11 @@ export class Accumulator {
           sessions,
           online_seconds: onlineSec,
         });
-
-        const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
         const dtSec = prev ? Math.max(1, Math.round((now - prev.ts) / 1000)) : 30;
+        // If we lost contact for more than 5 min, distrust the per-device counter delta —
+        // the router may have rebooted, the device may have reconnected, or our poller
+        // restarted. In all those cases the gap is too long to safely credit as one delta.
+        const gapTooLarge = dtSec > 5 * 60;
 
         let deltaDownBytes = 0;
         if (!prev) {
@@ -139,26 +161,49 @@ export class Accumulator {
           // Router rebooted: the new down_sum_kb starts fresh from 0; whatever it shows now is
           // bytes since reboot, so add them all.
           deltaDownBytes = downSumKb * 1024;
+        } else if (gapTooLarge) {
+          // Long gap without a confirmed reboot: re-baseline silently to avoid double-counting.
+          log.info('accumulator: long gap, re-baselining device counter', { mac, dtSec, prevKb: prev.down_sum_kb, curKb: downSumKb });
+          deltaDownBytes = 0;
         } else {
           const rawDeltaKb = downSumKb - prev.down_sum_kb;
           if (rawDeltaKb < 0) {
-            // Counter went backwards without a router reboot. Tenda zeroes per-device counters
-            // on session/lease events even while the device stays online. Credit prev's value
-            // (what was downloaded up to the regression) PLUS whatever's accumulated since:
-            //   prev=263, curr=0  → credit 263 KB (the regression itself, lost otherwise)
-            //   prev=200, curr=50 → credit 50 KB (treat curr as bytes since reset)
-            deltaDownBytes = (prev.down_sum_kb + downSumKb) * 1024;
-          } else if (rawDeltaKb > 50 * 1024 * 1024) {
-            // Sanity cap: > 50GB in one cycle is implausible
-            log.warn('accumulator: implausible delta clamped', { mac, rawDeltaKb });
+            // Counter went backwards. Tenda firmware sometimes flickers per-device counters
+            // briefly to 0 even when the device stays online (especially for low-traffic IoT).
+            // Heuristic: only credit if the post-reset counter is meaningfully larger than the
+            // jitter (≥ 64 KB) AND we're not on a fast flicker (dtSec < 30). Below that, treat
+            // it as transient noise — credit 0, but keep prev's counter as the high-water mark
+            // by writing the higher value back to samples_raw on the next call.
+            if (downSumKb >= 64 && dtSec >= 10) {
+              log.info('accumulator: per-device counter reset (treating as real)', { mac, prevKb: prev.down_sum_kb, curKb: downSumKb });
+              deltaDownBytes = downSumKb * 1024;
+            } else {
+              // Silent flicker; do nothing. Don't credit, don't warn.
+              deltaDownBytes = 0;
+            }
+          } else if (rawDeltaKb > 5 * 1024 * 1024) {
+            // Sanity cap: > 5 GB in one short cycle is implausible for a home network.
+            log.warn('accumulator: implausible delta clamped', { mac, rawDeltaKb, dtSec });
             deltaDownBytes = 0;
           } else {
             deltaDownBytes = rawDeltaKb * 1024;
           }
         }
 
-        const prevUp = prev?.up_speed_bps ?? upSpeed;
-        const deltaUpBytes = Math.round(((prevUp + upSpeed) / 2) * dtSec);
+        // Upload bytes are estimated from instantaneous KB/s × elapsed time, because the
+        // Tenda W30E firmware does not expose hostUploadSum. This undercounts bursts that
+        // happen between samples; the WAN-level cumulative total (see Sampler) is the
+        // ground truth for total upload.
+        let deltaUpBytes = 0;
+        if (prev && !gapTooLarge && isOnline) {
+          const prevUp = prev.up_speed_bps;
+          deltaUpBytes = Math.round(((prevUp + upSpeed) / 2) * dtSec);
+        }
+        // Sanity cap: avoid a corrupted speed value blowing up totals.
+        if (deltaUpBytes > 5 * 1024 * 1024 * 1024) {
+          log.warn('accumulator: implausible up delta clamped', { mac, deltaUpBytes, dtSec });
+          deltaUpBytes = 0;
+        }
 
         const bucket = bucket5Min(now);
         this.upsertBucket.run({

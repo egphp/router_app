@@ -235,6 +235,27 @@ export class RouterClient {
   }
 
   /**
+   * Per-WAN instantaneous flux reported as strings like "0.13KB/s", "12.4MB/s".
+   * Returns parsed bytes/sec for each WAN port that is up.
+   */
+  async getWanFlux(): Promise<Array<{ id: number; upBps: number; downBps: number }>> {
+    try {
+      const r = await this.call<{ getWanInfo: Array<Record<string, unknown>> }>(['getWanInfo'], { getWanInfo: '' });
+      const wans = Array.isArray(r.getWanInfo) ? r.getWanInfo : [];
+      return wans
+        .filter((w) => (w.wanStatus as string) === 'wired' || (w.wanStatus as string) === 'connected')
+        .map((w) => ({
+          id: Number(w.ID ?? 0),
+          upBps: parseFluxString(w.wanUpFlux as string | undefined),
+          downBps: parseFluxString(w.wanDownFlux as string | undefined),
+        }));
+    } catch (e) {
+      log.warn('router.getWanFlux failed', String(e));
+      return [];
+    }
+  }
+
+  /**
    * Reads the router's system log. sysLogType:
    *   0 = all, 1 = system events (login/sync), 2 = attack log (ARP/DDoS), 3 = quits
    */
@@ -256,6 +277,18 @@ export class RouterClient {
 
 function safeJson(s: string): any {
   try { return JSON.parse(s); } catch { return null; }
+}
+
+/** Parse Tenda flux strings like "0.13KB/s", "12.4MB/s", "5B/s" into bytes/sec. */
+function parseFluxString(s: string | undefined): number {
+  if (!s || typeof s !== 'string') return 0;
+  const m = s.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)\/s$/i);
+  if (!m) return 0;
+  const v = parseFloat(m[1]);
+  if (!Number.isFinite(v)) return 0;
+  const u = m[2].toUpperCase();
+  const mult = u === 'B' ? 1 : u === 'KB' ? 1024 : u === 'MB' ? 1024 * 1024 : 1024 * 1024 * 1024;
+  return Math.round(v * mult);
 }
 
 function parseCookieValue(setCookie: string, key: string): string | null {

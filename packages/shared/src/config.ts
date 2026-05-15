@@ -35,7 +35,7 @@ export function loadConfig(): Config {
     routerHost: process.env.ROUTER_HOST ?? '192.168.0.1',
     routerPassword: process.env.ROUTER_PASSWORD ?? '',
     dbPath,
-    pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 30000),
+    pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 10000),
     webPort: Number(process.env.WEB_PORT ?? 3030),
     ipcSocket: process.env.IPC_SOCKET ?? '/tmp/tenda-monitor.sock',
     logLevel: (process.env.LOG_LEVEL ?? 'info') as Config['logLevel'],

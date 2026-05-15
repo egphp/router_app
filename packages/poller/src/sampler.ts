@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { RouterClient, AuthError } from './router-client.js';
 import { Accumulator } from './accumulator.js';
+import { WanAccumulator } from './wan-accumulator.js';
 import { OutageMonitor } from './outage.js';
 import { RollupWorker } from './rollup.js';
 import { IpcBroadcaster } from './ipc.js';
@@ -22,6 +23,7 @@ export class Sampler {
   private logPullTimer: NodeJS.Timeout | null = null;
   private lastUptimeSec = 0;
   private accumulator: Accumulator;
+  private wanAccumulator: WanAccumulator;
   private outage: OutageMonitor;
   private rollup: RollupWorker;
   private security: SecurityScanner;
@@ -38,6 +40,7 @@ export class Sampler {
     private readonly intervalMs: number,
   ) {
     this.accumulator = new Accumulator(db);
+    this.wanAccumulator = new WanAccumulator(db);
     this.outage = new OutageMonitor(db);
     this.rollup = new RollupWorker(db);
     this.security = new SecurityScanner(db);
@@ -93,8 +96,12 @@ export class Sampler {
       this.insertRouterState.run(now, uptimeSec, isReboot ? 1 : 0, status.onlineHostCount);
       this.lastUptimeSec = uptimeSec;
 
-      const devices = await this.router.getDeviceList();
+      const [devices, wanFlux] = await Promise.all([
+        this.router.getDeviceList(),
+        this.router.getWanFlux(),
+      ]);
       const result = this.accumulator.process(now, devices, isReboot);
+      const wanResult = this.wanAccumulator.process(now, wanFlux);
 
       // NSFW URL detection (cheap; only scans new syslog rows since last tick).
       this.nsfw.scan(now);
@@ -130,6 +137,8 @@ export class Sampler {
         new: result.newDevices.length,
         deltaDownMB: (result.totalBytesDownDelta / 1024 / 1024).toFixed(2),
         deltaUpKB: (result.totalBytesUpDelta / 1024).toFixed(2),
+        wanDownKB: (wanResult.bytesDown / 1024).toFixed(2),
+        wanUpKB: (wanResult.bytesUp / 1024).toFixed(2),
         is_reboot: isReboot,
       });
     } catch (err) {

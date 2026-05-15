@@ -25,6 +25,8 @@ interface Status {
   total_devices: number;
   bytes_today_down: number;
   bytes_today_up: number;
+  wan_today_down: number;
+  wan_today_up: number;
   top_device: TopDevice | null;
   top_device_2: TopDevice | null;
   alerts: number;
@@ -155,11 +157,12 @@ export function Dashboard() {
             tone={status?.connected ? 'mint' : 'coral'}
           />
           <StatCard
-            label="Today (total)"
-            value={formatBytes((status?.bytes_today_down ?? 0) + (status?.bytes_today_up ?? 0))}
-            hint={`↓ ${formatBytes(status?.bytes_today_down ?? 0)} · ↑ ${formatBytes(status?.bytes_today_up ?? 0)}`}
+            label="Today (WAN total)"
+            value={formatBytes((status?.wan_today_down ?? 0) + (status?.wan_today_up ?? 0))}
+            hint={`↓ ${formatBytes(status?.wan_today_down ?? 0)} · ↑ ${formatBytes(status?.wan_today_up ?? 0)}`}
             icon={<Download size={16} strokeWidth={2.2} />}
             tone="peach"
+            title={`Per-device estimate: ↓ ${formatBytes(status?.bytes_today_down ?? 0)} · ↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
           />
           <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
         </div>

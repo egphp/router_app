@@ -6,12 +6,13 @@ interface Props {
   value: ReactNode;
   hint?: ReactNode;
   icon?: ReactNode;
+  title?: string;
   tone?: 'default' | 'peach' | 'mint' | 'lavender' | 'sun' | 'coral' |
          // legacy aliases (back-compat)
          'green' | 'red' | 'amber' | 'purple';
 }
 
-export function StatCard({ label, value, hint, icon, tone = 'default' }: Props) {
+export function StatCard({ label, value, hint, icon, title, tone = 'default' }: Props) {
   // Aurora tone palette: each tone provides an accent color + soft background
   const TONES = {
     default:  { accent: 'var(--peach)',    cardClass: 'card' },
@@ -28,7 +29,7 @@ export function StatCard({ label, value, hint, icon, tone = 'default' }: Props) 
   }[tone];
 
   return (
-    <div className={clsx(TONES.cardClass, 'p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5')}>
+    <div title={title} className={clsx(TONES.cardClass, 'p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5')}>
       <div className="flex items-start justify-between gap-2">
         <div className="stat-label truncate">{label}</div>
         {icon && (

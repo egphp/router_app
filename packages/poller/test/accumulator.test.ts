@@ -61,22 +61,26 @@ test('reboot detected → counter starts fresh, full sum counted', () => {
   assert.equal(r.totalBytesDownDelta, 500 * 1024, 'after reboot we add full new sum');
 });
 
-test('counter regression credits prev value + new (per-session zero, prev would be lost)', () => {
+test('counter regression to a real, large new value is treated as a real reset', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
   acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 50_000 })], false);
+  // prev=50_000 KB, curr=200 KB (much smaller). curr ≥ 64 → treated as a real session reset.
+  // Credit just the new bytes; we accept the loss of bytes between prev and the reset rather
+  // than risk crediting them twice via firmware flicker.
   const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 200 })], false);
-  // prev=50000 (would be lost if we only credit curr), curr=200 → total 50200 KB
-  assert.equal(r.totalBytesDownDelta, 50_200 * 1024);
+  assert.equal(r.totalBytesDownDelta, 200 * 1024);
 });
 
-test('counter reset to exactly 0 credits prev value (real-world Tenda behavior)', () => {
+test('flicker to 0: clamped to prev high-water mark, contributes 0 bytes', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
   acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 263 })], false);
-  const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 0 })], false);
-  // The 263 KB the device downloaded just before the zero MUST be credited
-  assert.equal(r.totalBytesDownDelta, 263 * 1024);
+  // Firmware flicker: same device reports sum=0 momentarily, then 263 again next tick.
+  const r1 = acc.process(1_010_000, [device('AA:BB:CC:00:00:01', { sumKb: 0 })], false);
+  assert.equal(r1.totalBytesDownDelta, 0, 'flicker contributes nothing');
+  const r2 = acc.process(1_020_000, [device('AA:BB:CC:00:00:01', { sumKb: 263 })], false);
+  assert.equal(r2.totalBytesDownDelta, 0, 'no spurious credit after flicker');
 });
 
 test('implausibly large delta clamped to 0 with warning', () => {
@@ -84,16 +88,17 @@ test('implausibly large delta clamped to 0 with warning', () => {
   const acc = new Accumulator(db);
   acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_000 })], false);
   const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 100 * 1024 * 1024 })], false);
-  assert.equal(r.totalBytesDownDelta, 0, '>50GB jump rejected');
+  assert.equal(r.totalBytesDownDelta, 0, '>5GB jump rejected');
 });
 
-test('upload integration: bytes ≈ avg(prev_speed, now_speed) × dt', () => {
+test('upload integration: bytes ≈ avg(prev_speed, now_speed) × dt, with KB/s units', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
-  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { up: 1000, sumKb: 0 })], false);
-  const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { up: 2000, sumKb: 0 })], false);
-  // avg(1000, 2000) × 30s = 45000 bytes
-  assert.equal(r.totalBytesUpDelta, 45_000);
+  // Tenda reports speeds in KB/s (integer). Accumulator stores bytes/s internally.
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { up: 1, sumKb: 0 })], false);
+  const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { up: 3, sumKb: 0 })], false);
+  // avg(1, 3) KB/s = 2 KB/s = 2048 B/s; × 30s = 61440 bytes
+  assert.equal(r.totalBytesUpDelta, 2 * 1024 * 30);
 });
 
 test('new MAC inserts new_device alert', () => {
@@ -105,13 +110,14 @@ test('new MAC inserts new_device alert', () => {
   assert.equal((alerts[0] as any).mac, 'AA:BB:CC:00:00:99');
 });
 
-test('offline device contributes 0 speed, no spurious upload integration', () => {
+test('offline device contributes 0 upload (no integration when offline)', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
-  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { up: 1000, sumKb: 0, online: 1 })], false);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { up: 1, sumKb: 0, online: 1 })], false);
+  // When the device goes offline, we deliberately skip the upload integration to avoid
+  // a transitional half-trapezoid spike that overstates traffic during disconnect events.
   const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { up: 0, sumKb: 0, online: 0 })], false);
-  // avg(1000, 0) * 30 = 15000 (transitional; this is acceptable trapezoidal behavior)
-  assert.equal(r.totalBytesUpDelta, 15_000);
+  assert.equal(r.totalBytesUpDelta, 0);
 });
 
 test('multiple devices accumulated independently', () => {
@@ -145,17 +151,19 @@ test('full reboot scenario: data preserved across counter reset', () => {
   assert.equal(total, expected, `expected ${expected} bytes, got ${total}`);
 });
 
-test('per-session zero (no reboot): prev value preserved across reset', () => {
+test('per-session zero (no reboot): flicker absorbed, no double-counting', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
-  // Real-world: device accumulates, then router zeros the per-device counter
+  // Real-world: device counter accumulates, then the firmware *flickers* to 0 between
+  // samples and returns to the true value. The accumulator must not credit anything for
+  // the flicker, since crediting prev+new would inflate totals on every transient zero.
   acc.process(1_000_000, [device('AA:00:00:00:00:01', { sumKb: 100 })], false);
   acc.process(1_030_000, [device('AA:00:00:00:00:01', { sumKb: 263 })], false);  // +163K
-  acc.process(1_060_000, [device('AA:00:00:00:00:01', { sumKb: 0 })], false);    // reset → credit 263K
-  acc.process(1_090_000, [device('AA:00:00:00:00:01', { sumKb: 50 })], false);   // +50K
+  acc.process(1_060_000, [device('AA:00:00:00:00:01', { sumKb: 0 })], false);    // flicker (≤ 64KB; treated as noise)
+  acc.process(1_090_000, [device('AA:00:00:00:00:01', { sumKb: 50 })], false);   // ≤ 64KB after a flicker — still treated as noise; the real counter is back to >= 263
 
   const total = (db.prepare(`SELECT SUM(bytes_down) AS s FROM traffic_5min WHERE mac = 'AA:00:00:00:00:01'`).get() as any).s;
-  // Expected: 0 (first) + 163K + 263K (reset preserved prev) + 50K = 476K
-  const expected = (0 + 163 + 263 + 50) * 1024;
+  // Expected: 0 (first) + 163K (real delta) + 0 (flicker absorbed) + 0 (still under flicker threshold)
+  const expected = (0 + 163 + 0 + 0) * 1024;
   assert.equal(total, expected, `expected ${expected} bytes, got ${total}`);
 });

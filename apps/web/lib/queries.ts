@@ -29,6 +29,9 @@ export interface RouterSnapshot {
   last_sample_ts: number | null;
   bytes_today_down: number;
   bytes_today_up: number;
+  /** WAN-level ground truth — authoritative total down/up bytes today (integrated from router's wanFlux). */
+  wan_today_down: number;
+  wan_today_up: number;
   top_device: { mac: string; label: string; bytes_down: number; bytes_up: number } | null;
   top_device_2: { mac: string; label: string; bytes_down: number; bytes_up: number } | null;
   alerts_undismissed: number;
@@ -124,6 +127,12 @@ export function getRouterSnapshot(): RouterSnapshot {
       (SELECT COUNT(*) FROM alerts WHERE dismissed_at IS NULL) AS alerts
   `).get() as { total: number; alerts: number };
 
+  // WAN-level cumulative today (ground truth, independent of per-device estimates).
+  const wanRow = conn.prepare(`
+    SELECT COALESCE(SUM(bytes_down), 0) AS bd, COALESCE(SUM(bytes_up), 0) AS bu
+    FROM wan_traffic_5min WHERE bucket_ts >= ?
+  `).get(startOfDay) as { bd: number; bu: number } | undefined;
+
   return {
     uptime_sec: latest?.uptime_sec ?? 0,
     online_count: latest?.online_count ?? 0,
@@ -131,6 +140,8 @@ export function getRouterSnapshot(): RouterSnapshot {
     last_sample_ts: latest?.ts ?? null,
     bytes_today_down: Number(todayTotals.bytes_down ?? 0),
     bytes_today_up: Number(todayTotals.bytes_up ?? 0),
+    wan_today_down: Number(wanRow?.bd ?? 0),
+    wan_today_up: Number(wanRow?.bu ?? 0),
     top_device: topDevice,
     top_device_2: topDevice2,
     alerts_undismissed: counts.alerts,
