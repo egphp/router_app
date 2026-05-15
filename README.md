@@ -73,14 +73,108 @@ A self-hosted dashboard that polls your Tenda W30E v2.0 router every 30 seconds,
 
 ## Screenshots
 
-| | |
+> **Privacy note:** every screenshot in this README runs through a built-in mask
+> that scrambles MAC addresses, hostnames, and personal device labels.
+> No real device identifiers from any LAN are leaked.
+
+### Dashboard
+![Dashboard](docs/screenshots/dashboard.png)
+
+The main dashboard combines **4 status cards** (router uptime, today's download,
+top device, active alerts) with the **live-speed area chart**, the new
+**router telemetry card** (CPU / memory / dual-WAN flow / firmware), top
+talkers, traffic-by-category, concurrent device chart, anomalies, and the full
+device table. Toggle *Edit layout* in the top-right to drag widgets into any
+order — the order is persisted in `localStorage` and survives reloads.
+
+| Status cards | Live speed |
 |---|---|
-| ![Dashboard](docs/screenshots/dashboard.png) **Dashboard** — Live speed, top talkers, traffic categories, alerts | ![Consumption](docs/screenshots/consumption.png) **Consumption** — Today / week / month / year / all-time per device |
-| ![Report](docs/screenshots/report.png) **Daily report** — Each device × each day grid | ![Analytics](docs/screenshots/analytics.png) **Analytics** — Heatmap, concurrent devices, anomalies |
-| ![Security](docs/screenshots/security.png) **Security** — Detection rules + router syslog | ![Attacks](docs/screenshots/attacks.png) **Attacks** — ARP / DDoS log from router |
-| ![Alerts](docs/screenshots/alerts.png) **Alerts** — New devices, outages, reboots, security | ![Outages](docs/screenshots/outages.png) **Outages** — Reboot history + uptime % |
-| ![Map](docs/screenshots/map.png) **Network map** — Live SVG topology | ![Devices](docs/screenshots/devices.png) **Devices** — Full device inventory |
-| ![Settings](docs/screenshots/settings.png) **Settings** — Edit credentials live | ![Setup](docs/screenshots/setup.png) **Onboarding** — First-time setup |
+| Per-card glow + gradient text scaled to the metric tone (green / red / amber / purple). | 60-minute area chart auto-refreshing every 10 s, with kept-previous-data so transient errors don't blank it. |
+
+### Consumption
+![Consumption](docs/screenshots/consumption.png)
+
+Per-device totals for today / week / month / year / all-time. Sort selector
+also acts as a heading; clicking a column header re-sorts. Mobile flips to a
+card list with the active period highlighted.
+
+### Report
+![Report](docs/screenshots/report.png)
+
+Daily breakdown grid — every device × every day for the chosen window
+(7 / 14 / 30 / 60 / 90 days). Network totals show on top.
+
+### Analytics
+![Analytics](docs/screenshots/analytics.png)
+
+Top talkers, traffic by category, concurrent-online chart, anomaly detector,
+and a 24-hour activity heatmap.
+
+### Security
+![Security](docs/screenshots/security.png)
+
+Lists the **5 built-in detection rules**, current active findings grouped by
+rule, and the live router syslog stream.
+
+### Attacks
+![Attacks](docs/screenshots/attacks.png)
+
+Pulls the router's own ARP / DDoS attack log every 2 minutes, groups by
+attacker MAC and kind, and shows the top attackers + recent raw entries.
+
+### Alerts
+![Alerts](docs/screenshots/alerts.png)
+
+Unified inbox for new devices, security findings, reboots, and outages.
+Filter chips, *Mark all known*, and *Dismiss all* live in the header.
+
+### Outages
+![Outages](docs/screenshots/outages.png)
+
+Uptime % over the last 30 days, total downtime, and a timeline of every
+outage with duration and reason.
+
+### Map
+![Map](docs/screenshots/map.png)
+
+Live radial SVG topology of online devices. Line thickness is proportional to
+current down-speed; nodes are color-coded (red = attacker, amber = new,
+green = active, slate = idle). Click any node to open the device detail page.
+
+### Devices
+![Devices](docs/screenshots/devices.png)
+
+The full device inventory: search, category filter, sort. Mobile flips to a
+card list with status badges and a *Mark known* button per row.
+
+### Export
+![Export](docs/screenshots/export.png)
+
+Per-feature CSV and JSON downloads — consumption, daily, attacks, syslog,
+outages.
+
+### Settings
+![Settings](docs/screenshots/settings.png)
+
+Edit router IP / password live (the poller hot-swaps credentials without
+restarting), toggle adult-content detection, and view system diagnostics
+(daemon state, polling interval, DB path).
+
+### Onboarding (`/setup`)
+![Setup](docs/screenshots/setup.png)
+
+Shown automatically on first run, when `.env` has no `ROUTER_PASSWORD`. The IP
+field is **auto-detected from the default gateway**; you can override it.
+
+### Mobile
+
+| iPhone (414 px) | Tablet (768 px) |
+|---|---|
+| ![Mobile dashboard](docs/screenshots/mobile/dashboard-iphone.png) | ![Tablet dashboard](docs/screenshots/mobile/dashboard-tablet.png) |
+| ![Mobile devices](docs/screenshots/mobile/devices-iphone.png) | ![Tablet devices](docs/screenshots/mobile/devices-tablet.png) |
+| ![Mobile alerts](docs/screenshots/mobile/alerts-iphone.png) | |
+| ![Mobile consumption](docs/screenshots/mobile/consumption-iphone.png) | |
+| ![Mobile settings](docs/screenshots/mobile/settings-iphone.png) | |
 
 ---
 
