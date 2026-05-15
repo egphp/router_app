@@ -129,15 +129,16 @@ export function classifyHost(host: string): { domain: string; category: string }
 /** Extract host strings from a free-form syslog message. Looks for URLs and bare domains. */
 export function extractHosts(message: string): string[] {
   const out = new Set<string>();
-  // URL form
+  // URL form (http://host or https://host)
   const urlRe = /https?:\/\/([A-Za-z0-9.-]+)/gi;
   let m: RegExpExecArray | null;
   while ((m = urlRe.exec(message)) !== null) out.add(m[1]);
-  // DNS/host="..." form
-  const hostRe = /host[=:"\s]+([A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi;
+  // host=foo, host:foo, host="foo", host foo
+  const hostRe = /host[=:"\s]+([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/gi;
   while ((m = hostRe.exec(message)) !== null) out.add(m[1]);
-  // Bare-ish FQDNs (best effort)
-  const fqdnRe = /\b([a-z0-9-]+(?:\.[a-z0-9-]+){1,}\.(?:com|net|org|tv|xxx|app|vip|red|es|world|me|cc|co|ru|io|uk))\b/gi;
+  // Bare FQDNs — catch any token that has at least one dot and a known TLD.
+  // Expanded TLD set covers most adult-domain TLDs in the embedded list.
+  const fqdnRe = /\b([a-z0-9-]+(?:\.[a-z0-9-]+){1,}\.(?:com|net|org|tv|xxx|app|vip|red|es|world|me|cc|co|ru|io|uk|info|biz|adult|porn|sex|cam|xyz|live|club|online|site|space))\b/gi;
   while ((m = fqdnRe.exec(message)) !== null) out.add(m[1]);
   return [...out];
 }
