@@ -7,6 +7,7 @@ import { IpcBroadcaster } from './ipc.js';
 import { startControlServer } from './control-server.js';
 import { SyslogServer } from './syslog-server.js';
 import { TelegramNotifier } from './telegram-notifier.js';
+import { EnrichmentWorker } from './enrichment.js';
 import { log } from './logger.js';
 
 function resolveRepoRoot(): string {
@@ -39,6 +40,9 @@ async function main() {
   const tg = new TelegramNotifier(db);
   const tgTimer = setInterval(() => { tg.tick().catch((e) => log.warn('tg.tick error', String(e))); }, 60_000);
 
+  const enrichment = new EnrichmentWorker(db);
+  enrichment.start();
+
   if (!cfg.routerPassword) {
     log.warn('ROUTER_PASSWORD not set — control server ready for onboarding, sampler idle until credentials saved');
   } else {
@@ -64,6 +68,7 @@ async function main() {
     syslog.stop();
     clearInterval(tgTimer);
     clearInterval(credentialWatcher);
+    enrichment.stop();
     process.exit(0);
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
