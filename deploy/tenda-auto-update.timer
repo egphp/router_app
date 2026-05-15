@@ -1,0 +1,12 @@
+[Unit]
+Description=Run tenda-auto-update every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=10s
+Unit=tenda-auto-update.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

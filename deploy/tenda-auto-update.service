@@ -1,0 +1,10 @@
+[Unit]
+Description=Tenda Monitor — auto-update from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/router_app
+ExecStart=/usr/bin/env bash %h/router_app/deploy/auto-update.sh
+Nice=10

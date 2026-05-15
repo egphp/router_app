@@ -5,6 +5,7 @@ import { StatCard } from './StatCard';
 import { LiveSpeedChart } from './LiveSpeedChart';
 import { DeviceTable } from './DeviceTable';
 import { AlertBanner } from './AlertBanner';
+import { UpdateBanner } from './UpdateBanner';
 import { TopTalkers } from './TopTalkers';
 import { CategoryBreakdown } from './CategoryBreakdown';
 import { ConcurrentChart } from './ConcurrentChart';
@@ -28,6 +29,7 @@ export function Dashboard() {
 
   return (
     <div className="space-y-4 sm:space-y-5">
+      <UpdateBanner />
       <AlertBanner />
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
         <StatCard

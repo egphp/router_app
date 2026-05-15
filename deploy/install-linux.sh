@@ -50,11 +50,13 @@ fi
 step "5. Installing user systemd services"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_DIR"
-install -m 0644 "$APP_DIR/deploy/tenda-poller.service" "$SYSTEMD_DIR/tenda-poller.service"
-install -m 0644 "$APP_DIR/deploy/tenda-web.service"    "$SYSTEMD_DIR/tenda-web.service"
+install -m 0644 "$APP_DIR/deploy/tenda-poller.service"      "$SYSTEMD_DIR/tenda-poller.service"
+install -m 0644 "$APP_DIR/deploy/tenda-web.service"         "$SYSTEMD_DIR/tenda-web.service"
+install -m 0644 "$APP_DIR/deploy/tenda-auto-update.service" "$SYSTEMD_DIR/tenda-auto-update.service"
+install -m 0644 "$APP_DIR/deploy/tenda-auto-update.timer"   "$SYSTEMD_DIR/tenda-auto-update.timer"
 systemctl --user daemon-reload
-systemctl --user enable --now tenda-poller.service tenda-web.service
-ok "services enabled (auto-start on login)"
+systemctl --user enable --now tenda-poller.service tenda-web.service tenda-auto-update.timer
+ok "services enabled (auto-start on login + auto-update every 2 min)"
 
 step "6. Enabling lingering (services run without an active session)"
 sudo loginctl enable-linger "$USER" || true
