@@ -75,7 +75,8 @@ export default function ReportPage() {
             const yesterday = today - 86400000;
             const label = d.ts === today ? 'Today' : d.ts === yesterday ? 'Yesterday' : new Date(d.ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
             return (
-              <div key={d.ts} className="flex flex-col items-center text-[10px] text-slate-500 min-w-[28px]" title={`${label}: ${formatBytes(total)}`}>
+              <div key={d.ts} className="flex flex-col items-center text-[10px] text-slate-500 min-w-[28px]"
+                   title={`${label} · total ${formatBytes(total)} (↓ ${formatBytes(d.bd)} · ↑ ${formatBytes(d.bu)})`}>
                 <div className="text-slate-400 mb-1">{formatBytes(total, 0).replace(' ', '')}</div>
                 <div className="w-full bg-gradient-to-t from-blue-500 to-purple-500 rounded-t transition-all"
                   style={{ height: `${Math.max(2, h)}%` }} />
@@ -130,8 +131,10 @@ export default function ReportPage() {
                       </td>
                     );
                   })}
-                  <td className="px-3 py-1 text-right tabular-nums font-semibold text-slate-100">
-                    {formatBytes(r.total_down + r.total_up)}
+                  <td className="px-3 py-1 text-right tabular-nums font-semibold text-slate-100"
+                      title={`↓ ${formatBytes(r.total_down)} · ↑ ${formatBytes(r.total_up)}`}>
+                    <div>{formatBytes(r.total_down + r.total_up)}</div>
+                    <div className="text-[9px] text-slate-500 font-normal">↓{formatBytes(r.total_down, 0)} ↑{formatBytes(r.total_up, 0)}</div>
                   </td>
                 </tr>
               ))}

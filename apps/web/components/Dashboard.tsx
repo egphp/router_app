@@ -17,7 +17,7 @@ import { TelemetryBar } from './TelemetryBar';
 import { formatBytes, formatDuration, categoryIcon } from '../lib/format';
 import { Activity, Download, Bell, Crown, GripVertical, RotateCcw, Lock, Unlock, PieChart } from 'lucide-react';
 
-interface TopDevice { mac: string; label: string; bytes_down: number }
+interface TopDevice { mac: string; label: string; bytes_down: number; bytes_up: number }
 interface Status {
   connected: boolean;
   uptime_sec: number;
@@ -155,9 +155,9 @@ export function Dashboard() {
             tone={status?.connected ? 'mint' : 'coral'}
           />
           <StatCard
-            label="Today (download)"
-            value={formatBytes(status?.bytes_today_down ?? 0)}
-            hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
+            label="Today (total)"
+            value={formatBytes((status?.bytes_today_down ?? 0) + (status?.bytes_today_up ?? 0))}
+            hint={`↓ ${formatBytes(status?.bytes_today_down ?? 0)} · ↑ ${formatBytes(status?.bytes_today_up ?? 0)}`}
             icon={<Download size={16} strokeWidth={2.2} />}
             tone="peach"
           />
@@ -245,7 +245,12 @@ function TopDevicesCard({ top, second }: { top: TopDevice | null; second: TopDev
                 <div className="text-sm font-semibold truncate" style={{ color: i === 0 ? 'var(--lavender)' : 'var(--text-2)' }}>
                   {d.label}
                 </div>
-                <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-3)' }}>{formatBytes(d.bytes_down)}</div>
+                <div className="text-[11px] tabular-nums font-semibold" style={{ color: i === 0 ? 'var(--lavender)' : 'var(--text-2)' }}>
+                  {formatBytes(d.bytes_down + d.bytes_up)}
+                </div>
+                <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-3)' }}>
+                  ↓ {formatBytes(d.bytes_down, 0)} · ↑ {formatBytes(d.bytes_up, 0)}
+                </div>
               </div>
             </div>
           ) : (

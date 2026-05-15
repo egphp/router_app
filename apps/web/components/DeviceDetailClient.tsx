@@ -151,7 +151,12 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3">
+        <Mini
+          label="All-time total"
+          value={formatBytes(stats.bytes_down + stats.bytes_up)}
+          hint={`↓ ${formatBytes(stats.bytes_down, 0)} · ↑ ${formatBytes(stats.bytes_up, 0)}`}
+        />
         <Mini label="All-time ↓" value={formatBytes(stats.bytes_down)} />
         <Mini label="All-time ↑ (est)" value={formatBytes(stats.bytes_up)} />
         <Mini label="Peak ↓" value={formatBps(stats.peak_down_bps)} />
@@ -305,11 +310,12 @@ function DailyComparison({ rows }: { rows: DailyRow[] }) {
   );
 }
 
-function Mini({ label, value }: { label: string; value: string }) {
+function Mini({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="card p-4">
       <div className="stat-label">{label}</div>
       <div className="text-lg font-semibold text-slate-100 mt-1 tabular-nums">{value}</div>
+      {hint && <div className="text-[10px] tabular-nums mt-0.5" style={{ color: 'var(--text-3)' }}>{hint}</div>}
     </div>
   );
 }

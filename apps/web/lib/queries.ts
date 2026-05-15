@@ -29,8 +29,8 @@ export interface RouterSnapshot {
   last_sample_ts: number | null;
   bytes_today_down: number;
   bytes_today_up: number;
-  top_device: { mac: string; label: string; bytes_down: number } | null;
-  top_device_2: { mac: string; label: string; bytes_down: number } | null;
+  top_device: { mac: string; label: string; bytes_down: number; bytes_up: number } | null;
+  top_device_2: { mac: string; label: string; bytes_down: number; bytes_up: number } | null;
   alerts_undismissed: number;
 }
 
@@ -100,22 +100,22 @@ export function getRouterSnapshot(): RouterSnapshot {
   `).get(startOfDay, startOfDay) as { bytes_down: number; bytes_up: number };
 
   const topToday = conn.prepare(`
-    SELECT mac, SUM(bytes_down) AS bd FROM (
-      SELECT mac, bytes_down FROM traffic_5min WHERE bucket_ts >= ?
+    SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM (
+      SELECT mac, bytes_down, bytes_up FROM traffic_5min WHERE bucket_ts >= ?
       UNION ALL
-      SELECT mac, bytes_down FROM traffic_hour WHERE bucket_ts >= ?
-    ) GROUP BY mac ORDER BY bd DESC LIMIT 2
-  `).all(startOfDay, startOfDay) as Array<{ mac: string; bd: number }>;
+      SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ?
+    ) GROUP BY mac ORDER BY (bd + bu) DESC LIMIT 2
+  `).all(startOfDay, startOfDay) as Array<{ mac: string; bd: number; bu: number }>;
 
   let topDevice = null as RouterSnapshot['top_device'];
   let topDevice2 = null as RouterSnapshot['top_device'];
   if (topToday[0]) {
     const d = conn.prepare(`SELECT mac, COALESCE(custom_label, hostname, mac) AS label FROM devices WHERE mac = ?`).get(topToday[0].mac) as { mac: string; label: string };
-    topDevice = { mac: d.mac, label: d.label, bytes_down: topToday[0].bd };
+    topDevice = { mac: d.mac, label: d.label, bytes_down: Number(topToday[0].bd ?? 0), bytes_up: Number(topToday[0].bu ?? 0) };
   }
   if (topToday[1]) {
     const d = conn.prepare(`SELECT mac, COALESCE(custom_label, hostname, mac) AS label FROM devices WHERE mac = ?`).get(topToday[1].mac) as { mac: string; label: string };
-    topDevice2 = { mac: d.mac, label: d.label, bytes_down: topToday[1].bd };
+    topDevice2 = { mac: d.mac, label: d.label, bytes_down: Number(topToday[1].bd ?? 0), bytes_up: Number(topToday[1].bu ?? 0) };
   }
 
   const counts = conn.prepare(`

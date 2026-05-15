@@ -116,12 +116,16 @@ export function TelemetryBar() {
                 const ulMB = getNum(w, 'FlowUpstream', 'upMB');
                 const dlBytes = dlMB !== undefined ? dlMB * 1024 * 1024 : getNum(w, 'downBytes', 'rxBytes');
                 const ulBytes = ulMB !== undefined ? ulMB * 1024 * 1024 : getNum(w, 'upBytes', 'txBytes');
+                const totalBytes = (dlBytes ?? 0) + (ulBytes ?? 0);
+                const hasAny = dlBytes !== undefined || ulBytes !== undefined;
                 return (
                   <div key={i} className="flex items-center gap-2">
                     <Globe size={12} className="text-slate-500" />
                     <div>
                       <div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold leading-none">WAN {i + 1}</div>
                       <div className="flex items-baseline gap-1.5 mt-0.5 text-xs tabular-nums">
+                        <span className="text-slate-100 font-semibold">Σ {hasAny ? formatBytes(totalBytes, 0) : '—'}</span>
+                        <span className="text-slate-600">·</span>
                         <span className="text-blue-400">↓ {dlBytes !== undefined ? formatBytes(dlBytes, 0) : '—'}</span>
                         <span className="text-slate-600">·</span>
                         <span className="text-orange-400">↑ {ulBytes !== undefined ? formatBytes(ulBytes, 0) : '—'}</span>

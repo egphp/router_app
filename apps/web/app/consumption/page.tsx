@@ -55,14 +55,17 @@ export default function ConsumptionPage() {
     return list;
   }, [rows, sort, search]);
 
-  // Totals row
+  // Totals row (separate down + up so the cards can show the breakdown)
   const totals = useMemo(() => sorted.reduce((acc, r) => ({
-    today: acc.today + r.today_down + r.today_up,
-    week:  acc.week  + r.week_down  + r.week_up,
-    month: acc.month + r.month_down + r.month_up,
-    year:  acc.year  + r.year_down  + r.year_up,
-    total: acc.total + r.total_down + r.total_up,
-  }), { today: 0, week: 0, month: 0, year: 0, total: 0 }), [sorted]);
+    today: { down: acc.today.down + r.today_down, up: acc.today.up + r.today_up },
+    week:  { down: acc.week.down  + r.week_down,  up: acc.week.up  + r.week_up  },
+    month: { down: acc.month.down + r.month_down, up: acc.month.up + r.month_up },
+    year:  { down: acc.year.down  + r.year_down,  up: acc.year.up  + r.year_up  },
+    total: { down: acc.total.down + r.total_down, up: acc.total.up + r.total_up },
+  }), {
+    today: { down: 0, up: 0 }, week: { down: 0, up: 0 }, month: { down: 0, up: 0 },
+    year: { down: 0, up: 0 }, total: { down: 0, up: 0 },
+  }), [sorted]);
 
   const sortPeriod: Period = (sort.key === 'now_down' || sort.key === 'now_up') ? 'today' : sort.key;
 
@@ -115,7 +118,10 @@ export default function ConsumptionPage() {
             <button key={p.value} onClick={() => onSort(p.value as SortKey, 'desc')}
               className={`card p-4 text-left transition ${active ? 'border-accent ring-1 ring-accent/40' : 'hover:border-bg-border'}`}>
               <div className="stat-label">Network · {p.label}</div>
-              <div className="text-xl font-bold mt-1 tabular-nums">{formatBytes(v)}</div>
+              <div className="text-xl font-bold mt-1 tabular-nums">{formatBytes(v.down + v.up)}</div>
+              <div className="text-[10px] text-slate-500 tabular-nums mt-0.5">
+                ↓ {formatBytes(v.down, 0)} · ↑ {formatBytes(v.up, 0)}
+              </div>
             </button>
           );
         })}

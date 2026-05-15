@@ -58,8 +58,8 @@ export function DeviceTable() {
         case 'name': return sortStr(label(a), label(b), dir);
         case 'down': return sortNum(a.down_speed_bps, b.down_speed_bps, dir);
         case 'up': return sortNum(a.up_speed_bps, b.up_speed_bps, dir);
-        case 'today': return sortNum(a.bytes_today, b.bytes_today, dir);
-        case 'total': return sortNum(a.bytes_total, b.bytes_total, dir);
+        case 'today': return sortNum(a.bytes_today + a.bytes_up_today, b.bytes_today + b.bytes_up_today, dir);
+        case 'total': return sortNum(a.bytes_total + a.bytes_up_total, b.bytes_total + b.bytes_up_total, dir);
         case 'last_seen': return sortNum(a.last_seen, b.last_seen, dir);
       }
     });
@@ -162,8 +162,16 @@ export function DeviceTable() {
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-xs">
                   <div><span className="text-slate-500">↓ now:</span> <span className={d.online && d.down_speed_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>{d.online ? formatBps(d.down_speed_bps) : '—'}</span></div>
                   <div><span className="text-slate-500">↑ now:</span> <span className={d.online && d.up_speed_bps > 0 ? 'text-orange-400' : 'text-slate-600'}>{d.online ? formatBps(d.up_speed_bps) : '—'}</span></div>
-                  <div><span className="text-slate-500">Today:</span> <span className="text-slate-200 font-medium">{formatBytes(d.bytes_today)}</span></div>
-                  <div><span className="text-slate-500">All-time:</span> <span className="text-slate-100 font-semibold">{formatBytes(d.bytes_total)}</span></div>
+                  <div>
+                    <span className="text-slate-500">Today:</span>{' '}
+                    <span className="text-slate-200 font-medium">{formatBytes(d.bytes_today + d.bytes_up_today)}</span>
+                    <div className="text-[10px] text-slate-500">↓ {formatBytes(d.bytes_today, 0)} · ↑ {formatBytes(d.bytes_up_today, 0)}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">All-time:</span>{' '}
+                    <span className="text-slate-100 font-semibold">{formatBytes(d.bytes_total + d.bytes_up_total)}</span>
+                    <div className="text-[10px] text-slate-500">↓ {formatBytes(d.bytes_total, 0)} · ↑ {formatBytes(d.bytes_up_total, 0)}</div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-3 mt-2">
                   <span className="text-[10px] text-slate-500">{timeAgo(d.last_seen)}</span>
@@ -233,8 +241,18 @@ export function DeviceTable() {
                     </div>
                   ) : <span className="text-slate-600">offline</span>}
                 </td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort.key === 'today' && 'col-sorted font-semibold')}>{formatBytes(d.bytes_today)}</td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort.key === 'total' && 'col-sorted')}>{formatBytes(d.bytes_total)}</td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort.key === 'today' && 'col-sorted font-semibold')}>
+                  <div className="leading-tight">
+                    <div className="text-slate-200 font-semibold">{formatBytes(d.bytes_today + d.bytes_up_today)}</div>
+                    <div className="text-[10px] text-slate-500">↓ {formatBytes(d.bytes_today, 0)} · ↑ {formatBytes(d.bytes_up_today, 0)}</div>
+                  </div>
+                </td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort.key === 'total' && 'col-sorted')}>
+                  <div className="leading-tight">
+                    <div className="text-slate-100">{formatBytes(d.bytes_total + d.bytes_up_total)}</div>
+                    <div className="text-[10px] text-slate-500 font-normal">↓ {formatBytes(d.bytes_total, 0)} · ↑ {formatBytes(d.bytes_up_total, 0)}</div>
+                  </div>
+                </td>
                 <td className={clsx('px-4 py-2.5 text-right text-xs text-slate-500', sort.key === 'last_seen' && 'col-sorted')}>{timeAgo(d.last_seen)}</td>
                 <td className="px-4 py-2.5 text-right">
                   {d.is_new === 1 && (

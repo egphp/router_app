@@ -54,7 +54,10 @@ export function CategoryBreakdown() {
                 <span className="truncate">{c.category}</span>
                 <span className="text-xs text-slate-500">({c.device_count})</span>
               </div>
-              <span className="text-xs tabular-nums text-slate-400">{formatBytes(c.bytes_down + c.bytes_up)}</span>
+              <div className="text-right shrink-0 leading-tight">
+                <div className="text-xs tabular-nums text-slate-200 font-semibold">{formatBytes(c.bytes_down + c.bytes_up)}</div>
+                <div className="text-[10px] tabular-nums text-slate-500">↓ {formatBytes(c.bytes_down, 0)} · ↑ {formatBytes(c.bytes_up, 0)}</div>
+              </div>
             </div>
           ))}
           {cats.length === 0 && <div className="text-sm text-slate-500 text-center">No data.</div>}
