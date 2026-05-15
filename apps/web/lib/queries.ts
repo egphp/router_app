@@ -88,19 +88,18 @@ export function getRouterSnapshot(): RouterSnapshot {
     return d.getTime();
   })();
 
-  const todayTotals = conn.prepare(`
-    SELECT
-      COALESCE(SUM(t5.bd), 0) + COALESCE(SUM(th.bd), 0) AS bytes_down,
-      COALESCE(SUM(t5.bu), 0) + COALESCE(SUM(th.bu), 0) AS bytes_up
-    FROM (
-      SELECT 0 AS bd, 0 AS bu
-      UNION ALL SELECT SUM(bytes_down), SUM(bytes_up) FROM traffic_5min WHERE bucket_ts >= ?
-    ) t5
-    CROSS JOIN (
-      SELECT 0 AS bd, 0 AS bu
-      UNION ALL SELECT SUM(bytes_down), SUM(bytes_up) FROM traffic_hour WHERE bucket_ts >= ?
-    ) th
-  `).get(startOfDay, startOfDay) as { bytes_down: number; bytes_up: number };
+  const t5Totals = conn.prepare(`
+    SELECT COALESCE(SUM(bytes_down), 0) AS bd, COALESCE(SUM(bytes_up), 0) AS bu
+    FROM traffic_5min WHERE bucket_ts >= ?
+  `).get(startOfDay) as { bd: number; bu: number };
+  const thTotals = conn.prepare(`
+    SELECT COALESCE(SUM(bytes_down), 0) AS bd, COALESCE(SUM(bytes_up), 0) AS bu
+    FROM traffic_hour WHERE bucket_ts >= ?
+  `).get(startOfDay) as { bd: number; bu: number };
+  const todayTotals = {
+    bytes_down: Number(t5Totals.bd) + Number(thTotals.bd),
+    bytes_up: Number(t5Totals.bu) + Number(thTotals.bu),
+  };
 
   const topToday = conn.prepare(`
     SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM (
