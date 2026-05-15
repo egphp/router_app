@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
 import { formatBps, formatBytes, formatMacShort, categoryIcon, timeAgo } from '../lib/format';
 import { usePersistedState } from '../lib/usePersistedState';
+import { useTableSort, sortNum, sortStr, type SortDir } from '../lib/useTableSort';
 import { clsx } from 'clsx';
 
 interface DeviceRow {
@@ -32,7 +33,9 @@ type Filter = 'all' | 'online' | 'offline' | 'new';
 
 export function DeviceTable() {
   const { data, mutate } = useSWR<{ devices: DeviceRow[] }>('/api/devices', fetcher, { refreshInterval: 10000 });
-  const [sort, setSort] = usePersistedState<SortKey>('tenda.devices.sort', 'today');
+  const { sort, onSort, setSort, indicator } = useTableSort<SortKey>(
+    'tenda.devices.sort', { key: 'today', dir: 'desc' }
+  );
   const [filter, setFilter] = usePersistedState<Filter>('tenda.devices.filter', 'all');
   const [search, setSearch] = useState('');
 
@@ -49,14 +52,15 @@ export function DeviceTable() {
         d.mac.toLowerCase().includes(q)
       );
     }
+    const dir = sort.dir;
     list = [...list].sort((a, b) => {
-      switch (sort) {
-        case 'name': return (label(a) || '').localeCompare(label(b) || '');
-        case 'down': return b.down_speed_bps - a.down_speed_bps;
-        case 'up': return b.up_speed_bps - a.up_speed_bps;
-        case 'today': return b.bytes_today - a.bytes_today;
-        case 'total': return b.bytes_total - a.bytes_total;
-        case 'last_seen': return b.last_seen - a.last_seen;
+      switch (sort.key) {
+        case 'name': return sortStr(label(a), label(b), dir);
+        case 'down': return sortNum(a.down_speed_bps, b.down_speed_bps, dir);
+        case 'up': return sortNum(a.up_speed_bps, b.up_speed_bps, dir);
+        case 'today': return sortNum(a.bytes_today, b.bytes_today, dir);
+        case 'total': return sortNum(a.bytes_total, b.bytes_total, dir);
+        case 'last_seen': return sortNum(a.last_seen, b.last_seen, dir);
       }
     });
     return list;
@@ -71,6 +75,28 @@ export function DeviceTable() {
     });
     mutate();
   };
+
+  // The "Now" header cycles through 3 sort states: down desc → up desc → (back to today)
+  // But user wants click-on-column to toggle direction, so we keep it simple:
+  //   - First click on Now while not sorted by Now → sort by down desc
+  //   - Click again while sorted by down → switch to up desc (the other half of "Now")
+  //   - Click again while sorted by up → reverse to up asc
+  //   - Click again → reverse to down asc, then desc again, etc.
+  // This matches: clicking the same header repeatedly reverses direction within the active sub-column.
+  const onNowClick = () => {
+    if (sort.key === 'down') {
+      // toggle direction OR switch to up; we choose: toggle direction first, then alt key on next cycle
+      if (sort.dir === 'desc') setSort('down', 'asc');
+      else setSort('up', 'desc');
+    } else if (sort.key === 'up') {
+      if (sort.dir === 'desc') setSort('up', 'asc');
+      else setSort('down', 'desc');
+    } else {
+      setSort('down', 'desc');
+    }
+  };
+  const nowIndicator = sort.key === 'down' ? `↓${sort.dir === 'asc' ? ' ↑' : ' ↓'}`
+    : sort.key === 'up' ? `↑${sort.dir === 'asc' ? ' ↑' : ' ↓'}` : '';
 
   return (
     <div className="card overflow-hidden animate-fade-in">
@@ -92,14 +118,23 @@ export function DeviceTable() {
           <option value="all">All</option><option value="online">Online</option>
           <option value="offline">Offline</option><option value="new">New</option>
         </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
+        <select value={`${sort.key}:${sort.dir}`} onChange={(e) => {
+          const [k, d] = e.target.value.split(':') as [SortKey, SortDir];
+          setSort(k, d);
+        }}
           className="lg:hidden bg-bg-elevated border border-bg-border rounded-md px-2 py-1.5 text-xs sm:text-sm">
-          <option value="today">Sort: today</option>
-          <option value="total">Sort: total</option>
-          <option value="down">Sort: ↓ now</option>
-          <option value="up">Sort: ↑ now</option>
-          <option value="name">Sort: name</option>
-          <option value="last_seen">Sort: last seen</option>
+          <option value="today:desc">Sort: today ↓</option>
+          <option value="today:asc">Sort: today ↑</option>
+          <option value="total:desc">Sort: total ↓</option>
+          <option value="total:asc">Sort: total ↑</option>
+          <option value="down:desc">Sort: ↓ now (max)</option>
+          <option value="down:asc">Sort: ↓ now (min)</option>
+          <option value="up:desc">Sort: ↑ now (max)</option>
+          <option value="up:asc">Sort: ↑ now (min)</option>
+          <option value="name:asc">Sort: name A→Z</option>
+          <option value="name:desc">Sort: name Z→A</option>
+          <option value="last_seen:desc">Sort: last seen ↓</option>
+          <option value="last_seen:asc">Sort: last seen ↑</option>
         </select>
       </div>
       {/* Mobile card list (< lg) */}
@@ -151,12 +186,18 @@ export function DeviceTable() {
         <table className="w-full text-sm">
           <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
             <tr>
-              <SortableTh label="Device" k="name" sort={sort} setSort={setSort} align="left" />
+              <Th label="Device" active={sort.key === 'name'} indicator={indicator('name')} onClick={() => onSort('name', 'asc')} align="left" />
               <th className="px-4 py-2 text-left">Address</th>
-              <SortableTh label="Now" k="down" altK="up" sort={sort} setSort={setSort} hint="click: ↓ / ↑" />
-              <SortableTh label="Today" k="today" sort={sort} setSort={setSort} />
-              <SortableTh label="All-time" k="total" sort={sort} setSort={setSort} />
-              <SortableTh label="Last seen" k="last_seen" sort={sort} setSort={setSort} />
+              <Th
+                label="Now"
+                active={sort.key === 'down' || sort.key === 'up'}
+                indicator={nowIndicator}
+                onClick={onNowClick}
+                hint="cycles: ↓ desc → ↓ asc → ↑ desc → ↑ asc"
+              />
+              <Th label="Today" active={sort.key === 'today'} indicator={indicator('today')} onClick={() => onSort('today', 'desc')} />
+              <Th label="All-time" active={sort.key === 'total'} indicator={indicator('total')} onClick={() => onSort('total', 'desc')} />
+              <Th label="Last seen" active={sort.key === 'last_seen'} indicator={indicator('last_seen')} onClick={() => onSort('last_seen', 'desc')} />
               <th className="px-4 py-2"></th>
             </tr>
           </thead>
@@ -166,7 +207,7 @@ export function DeviceTable() {
                 'border-t border-bg-border hover:bg-bg-elevated/40 transition',
                 d.is_new === 1 && 'bg-accent-red/5'
               )}>
-                <td className="px-4 py-2.5">
+                <td className={clsx('px-4 py-2.5', sort.key === 'name' && 'bg-accent/5')}>
                   <div className="flex items-center gap-2">
                     <span className="text-lg">{categoryIcon(d.category)}</span>
                     <div>
@@ -184,7 +225,7 @@ export function DeviceTable() {
                   <div className="text-slate-300">{d.ip ?? '—'}</div>
                   <div className="text-xs text-slate-500">{formatMacShort(d.mac)}</div>
                 </td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums', (sort==='down'||sort==='up') && 'bg-accent/5')}>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums', (sort.key === 'down' || sort.key === 'up') && 'bg-accent/5')}>
                   {d.online ? (
                     <div className="leading-tight">
                       <div className={d.down_speed_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>↓ {formatBps(d.down_speed_bps)}</div>
@@ -192,9 +233,9 @@ export function DeviceTable() {
                     </div>
                   ) : <span className="text-slate-600">offline</span>}
                 </td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort==='today' && 'bg-accent/5 font-semibold')}>{formatBytes(d.bytes_today)}</td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort==='total' && 'bg-accent/5')}>{formatBytes(d.bytes_total)}</td>
-                <td className={clsx('px-4 py-2.5 text-right text-xs text-slate-500', sort==='last_seen' && 'bg-accent/5')}>{timeAgo(d.last_seen)}</td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort.key === 'today' && 'bg-accent/5 font-semibold')}>{formatBytes(d.bytes_today)}</td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort.key === 'total' && 'bg-accent/5')}>{formatBytes(d.bytes_total)}</td>
+                <td className={clsx('px-4 py-2.5 text-right text-xs text-slate-500', sort.key === 'last_seen' && 'bg-accent/5')}>{timeAgo(d.last_seen)}</td>
                 <td className="px-4 py-2.5 text-right">
                   {d.is_new === 1 && (
                     <button onClick={() => dismissNew(d.mac)}
@@ -219,16 +260,10 @@ function label(d: { custom_label: string | null; hostname: string | null; router
   return d.custom_label || d.router_remark || d.hostname || d.mac;
 }
 
-function SortableTh({ label, k, altK, sort, setSort, align = 'right', hint }: {
-  label: string; k: SortKey; altK?: SortKey; sort: SortKey; setSort: (s: SortKey) => void;
-  align?: 'left' | 'right'; hint?: string;
+function Th({ label, active, indicator, onClick, align = 'right', hint }: {
+  label: string; active: boolean; indicator: string;
+  onClick: () => void; align?: 'left' | 'right'; hint?: string;
 }) {
-  const active = sort === k || sort === altK;
-  const arrow = sort === k ? ' ↓' : sort === altK ? ' ↑' : '';
-  const onClick = () => {
-    if (!altK) { setSort(k); return; }
-    setSort(sort === k ? altK : k);
-  };
   return (
     <th
       onClick={onClick}
@@ -239,7 +274,7 @@ function SortableTh({ label, k, altK, sort, setSort, align = 'right', hint }: {
         active && 'text-accent'
       )}
     >
-      {label}{arrow}
+      {label}{indicator}
     </th>
   );
 }

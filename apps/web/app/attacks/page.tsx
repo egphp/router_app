@@ -1,9 +1,10 @@
 'use client';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
+import { useTableSort, sortNum, sortStr, SortHeader } from '../../lib/useTableSort';
 import { ShieldAlert, AlertOctagon, RefreshCw } from 'lucide-react';
 
 interface Entry {
@@ -27,12 +28,48 @@ const LOG_TYPES: Record<number, { label: string; color: string }> = {
   3: { label: 'quit', color: 'text-accent-amber bg-accent-amber/20' },
 };
 
+type AttackerKey = 'device' | 'kind' | 'events' | 'total' | 'latest';
+type EntryKey = 'time' | 'type' | 'attacker' | 'count';
+
 export default function AttacksPage() {
   const [filter, setFilter] = useState<number | null>(2);
   const url = filter === null ? '/api/attack-log?limit=500' : `/api/attack-log?limit=500&type=${filter}`;
   const { data, mutate, isValidating } = useSWR<Resp>(url, fetcher, { refreshInterval: 30000 });
   const entries = data?.entries ?? [];
   const stats = data?.stats;
+
+  const attackerSort = useTableSort<AttackerKey>('tenda.attacks.attackers.sort', { key: 'total', dir: 'desc' });
+  const entrySort = useTableSort<EntryKey>('tenda.attacks.entries.sort', { key: 'time', dir: 'desc' });
+
+  const sortedAttackers = useMemo(() => {
+    if (!stats) return [];
+    const list = [...stats.topAttackers];
+    const d = attackerSort.sort.dir;
+    list.sort((a, b) => {
+      switch (attackerSort.sort.key) {
+        case 'device': return sortStr(a.label || a.mac, b.label || b.mac, d);
+        case 'kind': return sortStr(a.attack_kind || '', b.attack_kind || '', d);
+        case 'events': return sortNum(a.event_count, b.event_count, d);
+        case 'total': return sortNum(a.total_attacks, b.total_attacks, d);
+        case 'latest': return sortNum(a.latest_ts, b.latest_ts, d);
+      }
+    });
+    return list;
+  }, [stats, attackerSort.sort]);
+
+  const sortedEntries = useMemo(() => {
+    const list = [...entries];
+    const d = entrySort.sort.dir;
+    list.sort((a, b) => {
+      switch (entrySort.sort.key) {
+        case 'time': return sortNum(a.ts, b.ts, d);
+        case 'type': return sortStr(a.attack_kind || '', b.attack_kind || '', d);
+        case 'attacker': return sortStr(a.device_label || a.attacker_mac || '', b.device_label || b.attacker_mac || '', d);
+        case 'count': return sortNum(a.attack_count ?? 0, b.attack_count ?? 0, d);
+      }
+    });
+    return list;
+  }, [entries, entrySort.sort]);
 
   return (
     <div className="space-y-5">
@@ -62,15 +99,15 @@ export default function AttacksPage() {
             <table className="w-full text-sm">
               <thead className="text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  <th className="px-3 py-2 text-left">Device</th>
-                  <th className="px-3 py-2 text-left">Kind</th>
-                  <th className="px-3 py-2 text-right">Events</th>
-                  <th className="px-3 py-2 text-right">Total attacks</th>
-                  <th className="px-3 py-2 text-right">Latest</th>
+                  <SortHeader label="Device" k="device" sort={attackerSort.sort} onSort={attackerSort.onSort} indicator={attackerSort.indicator} align="left" defaultDir="asc" />
+                  <SortHeader label="Kind" k="kind" sort={attackerSort.sort} onSort={attackerSort.onSort} indicator={attackerSort.indicator} align="left" defaultDir="asc" />
+                  <SortHeader label="Events" k="events" sort={attackerSort.sort} onSort={attackerSort.onSort} indicator={attackerSort.indicator} />
+                  <SortHeader label="Total attacks" k="total" sort={attackerSort.sort} onSort={attackerSort.onSort} indicator={attackerSort.indicator} />
+                  <SortHeader label="Latest" k="latest" sort={attackerSort.sort} onSort={attackerSort.onSort} indicator={attackerSort.indicator} />
                 </tr>
               </thead>
               <tbody>
-                {stats.topAttackers.map((a) => (
+                {sortedAttackers.map((a) => (
                   <tr key={`${a.mac}-${a.attack_kind}`} className="border-t border-bg-border">
                     <td className="px-3 py-2">
                       {a.mac ? (
@@ -116,15 +153,15 @@ export default function AttacksPage() {
             <table className="w-full text-xs font-mono">
               <thead className="bg-bg-card/60 sticky top-0 text-slate-500">
                 <tr>
-                  <th className="px-3 py-1.5 text-left whitespace-nowrap">Time</th>
-                  <th className="px-3 py-1.5 text-left">Type</th>
-                  <th className="px-3 py-1.5 text-left">Attacker</th>
-                  <th className="px-3 py-1.5 text-right">Count</th>
+                  <SortHeader label="Time" k="time" sort={entrySort.sort} onSort={entrySort.onSort} indicator={entrySort.indicator} align="left" className="px-3 py-1.5 whitespace-nowrap" />
+                  <SortHeader label="Type" k="type" sort={entrySort.sort} onSort={entrySort.onSort} indicator={entrySort.indicator} align="left" defaultDir="asc" className="px-3 py-1.5" />
+                  <SortHeader label="Attacker" k="attacker" sort={entrySort.sort} onSort={entrySort.onSort} indicator={entrySort.indicator} align="left" defaultDir="asc" className="px-3 py-1.5" />
+                  <SortHeader label="Count" k="count" sort={entrySort.sort} onSort={entrySort.onSort} indicator={entrySort.indicator} className="px-3 py-1.5" />
                   <th className="px-3 py-1.5 text-left">Message</th>
                 </tr>
               </thead>
               <tbody>
-                {entries.map((e) => {
+                {sortedEntries.map((e) => {
                   const t = LOG_TYPES[e.log_type] ?? { label: '?', color: 'text-slate-500' };
                   return (
                     <tr key={e.router_id} className="border-t border-bg-border/40">

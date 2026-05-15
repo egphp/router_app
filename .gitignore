@@ -12,3 +12,6 @@ dist
 .turbo
 coverage
 .admin
+
+# Screenshots from manual testing
+/*.png

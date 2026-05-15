@@ -1,15 +1,40 @@
 'use client';
+import { useMemo } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatDuration, timeAgo } from '../../lib/format';
+import { useTableSort, sortNum, sortStr, SortHeader } from '../../lib/useTableSort';
+import { clsx } from 'clsx';
 
 interface Outage {
   started_at: number; ended_at: number | null; reason: string; notes: string | null;
 }
 
+type SortKey = 'started' | 'duration' | 'reason';
+
 export default function OutagesPage() {
   const { data } = useSWR<{ outages: Outage[] }>('/api/outages', fetcher, { refreshInterval: 15000 });
   const outages = data?.outages ?? [];
+  const { sort, onSort, indicator } = useTableSort<SortKey>(
+    'tenda.outages.sort', { key: 'started', dir: 'desc' }
+  );
+
+  const sorted = useMemo(() => {
+    const list = [...outages];
+    const dir = sort.dir;
+    list.sort((a, b) => {
+      switch (sort.key) {
+        case 'started': return sortNum(a.started_at, b.started_at, dir);
+        case 'duration': {
+          const da = (a.ended_at ?? Date.now()) - a.started_at;
+          const db = (b.ended_at ?? Date.now()) - b.started_at;
+          return sortNum(da, db, dir);
+        }
+        case 'reason': return sortStr(a.reason, b.reason, dir);
+      }
+    });
+    return list;
+  }, [outages, sort]);
 
   const last30d = Date.now() - 30 * 86400 * 1000;
   const recentOutages = outages.filter((o) => o.started_at >= last30d);
@@ -31,27 +56,29 @@ export default function OutagesPage() {
         <table className="w-full text-sm min-w-[500px]">
           <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
             <tr>
-              <th className="px-4 py-2 text-left">Started</th>
-              <th className="px-4 py-2 text-left">Duration</th>
-              <th className="px-4 py-2 text-left">Reason</th>
+              <SortHeader label="Started" k="started" sort={sort} onSort={onSort} indicator={indicator} align="left" />
+              <SortHeader label="Duration" k="duration" sort={sort} onSort={onSort} indicator={indicator} align="left" />
+              <SortHeader label="Reason" k="reason" sort={sort} onSort={onSort} indicator={indicator} align="left" defaultDir="asc" />
               <th className="px-4 py-2 text-left">Notes</th>
             </tr>
           </thead>
           <tbody>
-            {outages.map((o) => (
+            {sorted.map((o) => (
               <tr key={o.started_at} className="border-t border-bg-border">
-                <td className="px-4 py-2.5">
+                <td className={clsx('px-4 py-2.5', sort.key === 'started' && 'bg-accent/5')}>
                   <div className="text-slate-200">{new Date(o.started_at).toLocaleString()}</div>
                   <div className="text-xs text-slate-500">{timeAgo(o.started_at)}</div>
                 </td>
-                <td className="px-4 py-2.5 tabular-nums">
+                <td className={clsx('px-4 py-2.5 tabular-nums', sort.key === 'duration' && 'bg-accent/5')}>
                   {o.ended_at ? formatDuration((o.ended_at - o.started_at) / 1000) : <span className="text-accent-red">ongoing</span>}
                 </td>
-                <td className="px-4 py-2.5"><span className="text-xs bg-bg-elevated rounded px-2 py-1 border border-bg-border">{o.reason}</span></td>
+                <td className={clsx('px-4 py-2.5', sort.key === 'reason' && 'bg-accent/5')}>
+                  <span className="text-xs bg-bg-elevated rounded px-2 py-1 border border-bg-border">{o.reason}</span>
+                </td>
                 <td className="px-4 py-2.5 text-xs text-slate-500 max-w-md truncate">{o.notes || '—'}</td>
               </tr>
             ))}
-            {outages.length === 0 && (
+            {sorted.length === 0 && (
               <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No outages recorded yet.</td></tr>
             )}
           </tbody>
@@ -61,3 +88,4 @@ export default function OutagesPage() {
     </div>
   );
 }
+

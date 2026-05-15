@@ -4,7 +4,8 @@ import Link from 'next/link';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatBytes, formatBps, categoryIcon } from '../../lib/format';
-import { usePersistedState } from '../../lib/usePersistedState';
+import { useTableSort, sortNum, type SortDir } from '../../lib/useTableSort';
+import { clsx } from 'clsx';
 
 interface Row {
   mac: string; label: string; category: string | null; vendor: string | null;
@@ -29,7 +30,9 @@ const PERIODS: { value: Period; label: string }[] = [
 export default function ConsumptionPage() {
   const { data } = useSWR<{ devices: Row[] }>('/api/consumption', fetcher, { refreshInterval: 10000 });
   const rows = data?.devices ?? [];
-  const [sort, setSort] = usePersistedState<SortKey>('tenda.consumption.sort', 'today');
+  const { sort, onSort, setSort, indicator } = useTableSort<SortKey>(
+    'tenda.consumption.sort', { key: 'today', dir: 'desc' }
+  );
   const [search, setSearch] = useState('');
 
   const sorted = useMemo(() => {
@@ -41,10 +44,13 @@ export default function ConsumptionPage() {
         (r.vendor || '').toLowerCase().includes(q)
       );
     }
+    const dir = sort.dir;
     list.sort((a, b) => {
-      if (sort === 'now_down') return b.now_down_bps - a.now_down_bps;
-      if (sort === 'now_up') return b.now_up_bps - a.now_up_bps;
-      return (b[`${sort}_down`] + b[`${sort}_up`]) - (a[`${sort}_down`] + a[`${sort}_up`]);
+      if (sort.key === 'now_down') return sortNum(a.now_down_bps, b.now_down_bps, dir);
+      if (sort.key === 'now_up') return sortNum(a.now_up_bps, b.now_up_bps, dir);
+      const at = (a[`${sort.key}_down`] + a[`${sort.key}_up`]);
+      const bt = (b[`${sort.key}_down`] + b[`${sort.key}_up`]);
+      return sortNum(at, bt, dir);
     });
     return list;
   }, [rows, sort, search]);
@@ -58,7 +64,22 @@ export default function ConsumptionPage() {
     total: acc.total + r.total_down + r.total_up,
   }), { today: 0, week: 0, month: 0, year: 0, total: 0 }), [sorted]);
 
-  const sortPeriod: Period = (sort === 'now_down' || sort === 'now_up') ? 'today' : sort;
+  const sortPeriod: Period = (sort.key === 'now_down' || sort.key === 'now_up') ? 'today' : sort.key;
+
+  // "Now" header cycles: down desc → down asc → up desc → up asc → down desc ...
+  const onNowClick = () => {
+    if (sort.key === 'now_down') {
+      if (sort.dir === 'desc') setSort('now_down', 'asc');
+      else setSort('now_up', 'desc');
+    } else if (sort.key === 'now_up') {
+      if (sort.dir === 'desc') setSort('now_up', 'asc');
+      else setSort('now_down', 'desc');
+    } else {
+      setSort('now_down', 'desc');
+    }
+  };
+  const nowIndicator = sort.key === 'now_down' ? `↓${sort.dir === 'asc' ? ' ↑' : ' ↓'}`
+    : sort.key === 'now_up' ? `↑${sort.dir === 'asc' ? ' ↑' : ' ↓'}` : '';
 
   return (
     <div className="space-y-5">
@@ -67,11 +88,21 @@ export default function ConsumptionPage() {
         <div className="flex items-center gap-2">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…"
             className="bg-bg-elevated border border-bg-border rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-accent" />
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
+          <select value={`${sort.key}:${sort.dir}`} onChange={(e) => {
+            const [k, d] = e.target.value.split(':') as [SortKey, SortDir];
+            setSort(k, d);
+          }}
             className="lg:hidden bg-bg-elevated border border-bg-border rounded px-2 py-1.5 text-sm">
-            <option value="now_down">Sort: ↓ now</option>
-            <option value="now_up">Sort: ↑ now</option>
-            {PERIODS.map((p) => <option key={p.value} value={p.value}>Sort by {p.label}</option>)}
+            <option value="now_down:desc">Sort: ↓ now (max)</option>
+            <option value="now_down:asc">Sort: ↓ now (min)</option>
+            <option value="now_up:desc">Sort: ↑ now (max)</option>
+            <option value="now_up:asc">Sort: ↑ now (min)</option>
+            {PERIODS.map((p) => (
+              <>
+                <option key={`${p.value}:desc`} value={`${p.value}:desc`}>Sort: {p.label} ↓</option>
+                <option key={`${p.value}:asc`} value={`${p.value}:asc`}>Sort: {p.label} ↑</option>
+              </>
+            ))}
           </select>
         </div>
       </div>
@@ -81,7 +112,7 @@ export default function ConsumptionPage() {
           const v = totals[p.value as keyof typeof totals];
           const active = sortPeriod === p.value;
           return (
-            <button key={p.value} onClick={() => setSort(p.value)}
+            <button key={p.value} onClick={() => onSort(p.value as SortKey, 'desc')}
               className={`card p-4 text-left transition ${active ? 'border-accent ring-1 ring-accent/40' : 'hover:border-bg-border'}`}>
               <div className="stat-label">Network · {p.label}</div>
               <div className="text-xl font-bold mt-1 tabular-nums">{formatBytes(v)}</div>
@@ -129,12 +160,12 @@ export default function ConsumptionPage() {
             <thead className="bg-bg-elevated/40 text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-2 text-left">Device</th>
-                <Th label="Now" k="now_down" altK="now_up" sort={sort} setSort={setSort} hint="click: ↓ / ↑" />
-                <Th label="Today" k="today" sort={sort} setSort={setSort} />
-                <Th label="Week" k="week" sort={sort} setSort={setSort} />
-                <Th label="Month" k="month" sort={sort} setSort={setSort} />
-                <Th label="Year" k="year" sort={sort} setSort={setSort} />
-                <Th label="All-time" k="total" sort={sort} setSort={setSort} />
+                <Th label="Now" active={sort.key === 'now_down' || sort.key === 'now_up'} indicator={nowIndicator} onClick={onNowClick} hint="cycles: ↓desc → ↓asc → ↑desc → ↑asc" />
+                <Th label="Today" active={sort.key === 'today'} indicator={indicator('today')} onClick={() => onSort('today', 'desc')} />
+                <Th label="Week" active={sort.key === 'week'} indicator={indicator('week')} onClick={() => onSort('week', 'desc')} />
+                <Th label="Month" active={sort.key === 'month'} indicator={indicator('month')} onClick={() => onSort('month', 'desc')} />
+                <Th label="Year" active={sort.key === 'year'} indicator={indicator('year')} onClick={() => onSort('year', 'desc')} />
+                <Th label="All-time" active={sort.key === 'total'} indicator={indicator('total')} onClick={() => onSort('total', 'desc')} />
               </tr>
             </thead>
             <tbody>
@@ -150,7 +181,7 @@ export default function ConsumptionPage() {
                       </div>
                     </Link>
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums leading-tight ${(sort==='now_down'||sort==='now_up') ? 'bg-accent/5' : ''}`}>
+                  <td className={clsx('px-3 py-2.5 text-right tabular-nums leading-tight', (sort.key === 'now_down' || sort.key === 'now_up') && 'bg-accent/5')}>
                     {r.online ? (
                       <>
                         <div className={r.now_down_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>↓ {formatBps(r.now_down_bps)}</div>
@@ -158,11 +189,11 @@ export default function ConsumptionPage() {
                       </>
                     ) : <span className="text-slate-600 text-xs">offline</span>}
                   </td>
-                  <ConsumptionCell down={r.today_down} up={r.today_up} highlight={sort === 'today'} />
-                  <ConsumptionCell down={r.week_down} up={r.week_up} highlight={sort === 'week'} />
-                  <ConsumptionCell down={r.month_down} up={r.month_up} highlight={sort === 'month'} />
-                  <ConsumptionCell down={r.year_down} up={r.year_up} highlight={sort === 'year'} />
-                  <ConsumptionCell down={r.total_down} up={r.total_up} highlight={sort === 'total'} />
+                  <ConsumptionCell down={r.today_down} up={r.today_up} highlight={sort.key === 'today'} />
+                  <ConsumptionCell down={r.week_down} up={r.week_up} highlight={sort.key === 'week'} />
+                  <ConsumptionCell down={r.month_down} up={r.month_up} highlight={sort.key === 'month'} />
+                  <ConsumptionCell down={r.year_down} up={r.year_up} highlight={sort.key === 'year'} />
+                  <ConsumptionCell down={r.total_down} up={r.total_up} highlight={sort.key === 'total'} />
                 </tr>
               ))}
               {sorted.length === 0 && (
@@ -176,23 +207,16 @@ export default function ConsumptionPage() {
   );
 }
 
-function Th({ label, k, altK, sort, setSort, hint }: {
-  label: string; k: SortKey; altK?: SortKey; sort: SortKey;
-  setSort: (s: SortKey) => void; hint?: string;
+function Th({ label, active, indicator, onClick, hint }: {
+  label: string; active: boolean; indicator: string; onClick: () => void; hint?: string;
 }) {
-  const active = sort === k || sort === altK;
-  const arrow = sort === k ? ' ↓' : sort === altK ? ' ↑' : '';
-  const onClick = () => {
-    if (!altK) { setSort(k); return; }
-    setSort(sort === k ? altK : k);
-  };
   return (
     <th
       onClick={onClick}
       title={hint ?? `Sort by ${label}`}
       className={`px-3 py-2 text-right cursor-pointer select-none hover:text-slate-200 transition ${active ? 'text-accent' : ''}`}
     >
-      {label}{arrow}
+      {label}{indicator}
     </th>
   );
 }
