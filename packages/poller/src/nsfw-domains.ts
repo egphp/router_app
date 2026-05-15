@@ -137,8 +137,9 @@ export function extractHosts(message: string): string[] {
   const hostRe = /host[=:"\s]+([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/gi;
   while ((m = hostRe.exec(message)) !== null) out.add(m[1]);
   // Bare FQDNs — catch any token that has at least one dot and a known TLD.
-  // Expanded TLD set covers most adult-domain TLDs in the embedded list.
-  const fqdnRe = /\b([a-z0-9-]+(?:\.[a-z0-9-]+){1,}\.(?:com|net|org|tv|xxx|app|vip|red|es|world|me|cc|co|ru|io|uk|info|biz|adult|porn|sex|cam|xyz|live|club|online|site|space))\b/gi;
+  // The `{0,}` (zero or more) extra labels lets us match both `host.tld`
+  // (e.g. `pornhub.com`) and `sub.host.tld` (e.g. `cdn.pornhub.com`).
+  const fqdnRe = /\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|tv|xxx|app|vip|red|es|world|me|cc|co|ru|io|uk|info|biz|adult|porn|sex|cam|xyz|live|club|online|site|space))\b/gi;
   while ((m = fqdnRe.exec(message)) !== null) out.add(m[1]);
   return [...out];
 }
