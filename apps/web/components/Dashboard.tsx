@@ -30,9 +30,9 @@ interface Status {
   alerts: number;
 }
 
-type WidgetId = 'stats' | 'live-speed' | 'top-talkers' | 'category' | 'concurrent' | 'anomalies' | 'devices';
+type WidgetId = 'overview' | 'top-talkers' | 'category' | 'concurrent' | 'anomalies' | 'devices';
 
-const DEFAULT_ORDER: WidgetId[] = ['stats', 'live-speed', 'top-talkers', 'category', 'concurrent', 'anomalies', 'devices'];
+const DEFAULT_ORDER: WidgetId[] = ['overview', 'top-talkers', 'category', 'concurrent', 'anomalies', 'devices'];
 const STORAGE_KEY = 'tenda.dashboardOrder.v1';
 const EDIT_KEY = 'tenda.dashboardEdit.v1';
 
@@ -54,8 +54,7 @@ function loadOrder(): WidgetId[] {
 }
 
 const WIDGET_LABELS: Record<WidgetId, string> = {
-  stats: 'Status cards',
-  'live-speed': 'Live speed',
+  overview: 'Overview (stats + live speed)',
   'top-talkers': 'Top talkers',
   category: 'Traffic by category',
   concurrent: 'Concurrent devices',
@@ -126,34 +125,35 @@ export function Dashboard() {
 
   const renderWidget = (id: WidgetId) => {
     switch (id) {
-      case 'stats':
+      case 'overview':
         return (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-            <StatCard
-              label="Router uptime"
-              value={formatDuration(status?.uptime_sec ?? 0)}
-              hint={status ? `${status.online_count} online of ${status.total_devices} known` : '...'}
-              icon={<Activity size={16} />}
-              tone={status?.connected ? 'green' : 'red'}
-            />
-            <StatCard
-              label="Today (download)"
-              value={formatBytes(status?.bytes_today_down ?? 0)}
-              hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
-              icon={<Download size={16} />}
-            />
-            <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
-            <StatCard
-              label="Active alerts"
-              value={status?.alerts ?? 0}
-              hint={status?.alerts ? 'see Alerts page' : 'all clear'}
-              icon={<Bell size={16} />}
-              tone={status && status.alerts > 0 ? 'red' : 'default'}
-            />
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 self-start">
+              <StatCard
+                label="Router uptime"
+                value={formatDuration(status?.uptime_sec ?? 0)}
+                hint={status ? `${status.online_count} online of ${status.total_devices} known` : '...'}
+                icon={<Activity size={16} />}
+                tone={status?.connected ? 'green' : 'red'}
+              />
+              <StatCard
+                label="Today (download)"
+                value={formatBytes(status?.bytes_today_down ?? 0)}
+                hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
+                icon={<Download size={16} />}
+              />
+              <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
+              <StatCard
+                label="Active alerts"
+                value={status?.alerts ?? 0}
+                hint={status?.alerts ? 'see Alerts page' : 'all clear'}
+                icon={<Bell size={16} />}
+                tone={status && status.alerts > 0 ? 'red' : 'default'}
+              />
+            </div>
+            <LiveSpeedChart />
           </div>
         );
-      case 'live-speed':
-        return <LiveSpeedChart />;
       case 'top-talkers':
         return <TopTalkers />;
       case 'category':
