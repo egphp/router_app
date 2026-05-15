@@ -276,7 +276,11 @@ export function updateDevice(mac: string, fields: { custom_label?: string | null
 }
 
 export function getDevice(mac: string) {
-  return db().prepare(`SELECT * FROM devices WHERE mac = ?`).get(mac);
+  return db().prepare(`
+    SELECT d.*,
+           (SELECT ip FROM samples_raw WHERE mac = d.mac ORDER BY ts DESC LIMIT 1) AS ip
+    FROM devices d WHERE d.mac = ?
+  `).get(mac);
 }
 
 /** Per-hour-of-week heatmap: 24h × 7d grid (avg bytes/sec). */
@@ -393,6 +397,7 @@ export function getTopTalkers(range: 'hour' | 'today' | 'week' | 'month' = 'toda
   return db().prepare(`
     SELECT d.mac, COALESCE(d.custom_label, d.router_remark, d.hostname, d.mac) AS label,
            d.category, d.vendor,
+           (SELECT ip FROM samples_raw WHERE mac = d.mac ORDER BY ts DESC LIMIT 1) AS ip,
            COALESCE(t.bd, 0) AS bytes_down, COALESCE(t.bu, 0) AS bytes_up
     FROM devices d
     LEFT JOIN (${sql}) t ON t.mac = d.mac

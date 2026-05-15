@@ -18,6 +18,7 @@ const RANGES: { value: Range; label: string }[] = [
 
 interface Device {
   mac: string;
+  ip: string | null;
   hostname: string | null;
   router_remark: string | null;
   custom_label: string | null;
@@ -88,8 +89,18 @@ export function DeviceDetailClient({ device, initialStats }: {
                     <span className="text-[10px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold">NEW</span>
                   )}
                 </h1>
-                <div className="text-sm text-slate-400 mt-1">
-                  {device.vendor || 'Unknown vendor'} · {device.mac} · category: <span className="text-slate-300">{device.category ?? 'unknown'}</span>
+                <div className="text-sm text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>{device.vendor || 'Unknown vendor'}</span>
+                  <span className="text-slate-600">·</span>
+                  {device.ip && (
+                    <>
+                      <span className="font-mono text-slate-300">{device.ip}</span>
+                      <span className="text-slate-600">·</span>
+                    </>
+                  )}
+                  <span className="font-mono">{device.mac}</span>
+                  <span className="text-slate-600">·</span>
+                  <span>category: <span className="text-slate-300">{device.category ?? 'unknown'}</span></span>
                 </div>
                 <div className="text-xs text-slate-500 mt-1">
                   first seen {new Date(device.first_seen).toLocaleString()} · last seen {new Date(device.last_seen).toLocaleString()}

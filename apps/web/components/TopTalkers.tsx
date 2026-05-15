@@ -5,7 +5,7 @@ import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
 import { formatBytes, categoryIcon } from '../lib/format';
 
-interface Talker { mac: string; label: string; category: string | null; vendor: string | null; bytes_down: number; bytes_up: number }
+interface Talker { mac: string; label: string; category: string | null; vendor: string | null; ip: string | null; bytes_down: number; bytes_up: number }
 
 const RANGES = [
   { value: 'hour', label: '1h' },
@@ -47,8 +47,11 @@ export function TopTalkers() {
               <div className="flex items-center gap-3 text-sm">
                 <span className="text-slate-500 text-xs tabular-nums w-5">#{i + 1}</span>
                 <span className="text-lg">{categoryIcon(t.category)}</span>
-                <span className="flex-1 truncate group-hover:text-accent">{t.label}</span>
-                <span className="text-xs text-slate-400 tabular-nums">{formatBytes(total)}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="truncate group-hover:text-accent">{t.label}</div>
+                  {t.ip && <div className="text-[10px] text-slate-500 font-mono leading-tight">{t.ip}</div>}
+                </div>
+                <span className="text-xs text-slate-400 tabular-nums shrink-0">{formatBytes(total)}</span>
               </div>
               <div className="ml-9 mt-1 h-1.5 bg-bg-elevated rounded overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all"
