@@ -61,28 +61,28 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-xl font-semibold">Alerts</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => callApi('mark_all_known')} disabled={busy || (counts.byKind.new_device ?? 0) === 0}
-            className="px-3 py-1.5 rounded bg-accent-green/10 border border-accent-green/30 text-accent-green text-sm hover:bg-accent-green/20 disabled:opacity-40 flex items-center gap-1.5">
+            className="px-2.5 sm:px-3 py-1.5 rounded bg-accent-green/10 border border-accent-green/30 text-accent-green text-xs sm:text-sm hover:bg-accent-green/20 disabled:opacity-40 flex items-center gap-1.5">
             <CheckSquare size={14} /> Mark all known
-            {counts.byKind.new_device > 0 && <span className="text-xs bg-accent-green/20 px-1.5 rounded">{counts.byKind.new_device}</span>}
+            {counts.byKind.new_device > 0 && <span className="text-[10px] sm:text-xs bg-accent-green/20 px-1.5 rounded">{counts.byKind.new_device}</span>}
           </button>
           <button onClick={() => callApi('dismiss_all')} disabled={busy || counts.total === 0}
-            className="px-3 py-1.5 rounded bg-bg-elevated border border-bg-border text-sm hover:bg-bg-border disabled:opacity-40 flex items-center gap-1.5">
+            className="px-2.5 sm:px-3 py-1.5 rounded bg-bg-elevated border border-bg-border text-xs sm:text-sm hover:bg-bg-border disabled:opacity-40 flex items-center gap-1.5">
             <X size={14} /> Dismiss all
-            {counts.total > 0 && <span className="text-xs bg-bg-border px-1.5 rounded">{counts.total}</span>}
+            {counts.total > 0 && <span className="text-[10px] sm:text-xs bg-bg-border px-1.5 rounded">{counts.total}</span>}
           </button>
         </div>
       </div>
 
-      <div className="card p-3 flex items-center gap-2 animate-fade-in">
-        <Filter size={14} className="text-slate-500" />
+      <div className="card p-3 flex items-center gap-2 animate-fade-in flex-wrap">
+        <Filter size={14} className="text-slate-500 shrink-0" />
         <div className="flex gap-1 flex-wrap">
           {KINDS.map((k) => (
             <button key={k.value} onClick={() => setFilter(k.value)}
-              className={`px-3 py-1 rounded text-xs ${filter === k.value ? 'bg-accent text-white' : 'bg-bg-elevated text-slate-400 hover:text-slate-100'}`}>
+              className={`px-2.5 sm:px-3 py-1 rounded text-xs ${filter === k.value ? 'bg-accent text-white' : 'bg-bg-elevated text-slate-400 hover:text-slate-100'}`}>
               {k.label}
               {k.value !== 'all' && counts.byKind[k.value] > 0 && (
                 <span className="ml-1.5 text-[10px] bg-black/30 rounded px-1">{counts.byKind[k.value]}</span>
@@ -90,8 +90,8 @@ export default function AlertsPage() {
             </button>
           ))}
         </div>
-        <div className="flex-1" />
-        <label className="text-xs text-slate-400 flex items-center gap-2 cursor-pointer">
+        <div className="flex-1 min-w-0" />
+        <label className="text-xs text-slate-400 flex items-center gap-2 cursor-pointer shrink-0">
           <input type="checkbox" checked={showDismissed} onChange={(e) => setShowDismissed(e.target.checked)}
             className="accent-blue-500" />
           Show dismissed

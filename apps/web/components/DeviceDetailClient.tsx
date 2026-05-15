@@ -76,13 +76,13 @@ export function DeviceDetailClient({ device, initialStats }: {
 
   return (
     <div className="space-y-5">
-      <div className="card p-5 animate-fade-in">
-        <div className="flex items-start gap-4">
-          <div className="text-4xl">{categoryIcon(device.category)}</div>
-          <div className="flex-1">
+      <div className="card p-4 sm:p-5 animate-fade-in">
+        <div className="flex items-start gap-3 sm:gap-4">
+          <div className="text-3xl sm:text-4xl shrink-0">{categoryIcon(device.category)}</div>
+          <div className="flex-1 min-w-0">
             {!editing ? (
               <>
-                <h1 className="text-2xl font-bold flex items-center gap-3">
+                <h1 className="text-lg sm:text-2xl font-bold flex items-center gap-2 sm:gap-3 flex-wrap">
                   {displayName}
                   {device.is_new === 1 && (
                     <span className="text-[10px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold">NEW</span>
@@ -137,7 +137,7 @@ export function DeviceDetailClient({ device, initialStats }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
         <Mini label="All-time ↓" value={formatBytes(stats.bytes_down)} />
         <Mini label="All-time ↑ (est)" value={formatBytes(stats.bytes_up)} />
         <Mini label="Peak ↓" value={formatBps(stats.peak_down_bps)} />
@@ -150,10 +150,10 @@ export function DeviceDetailClient({ device, initialStats }: {
             <div className="stat-label">Traffic by bucket</div>
             <div className="text-xs text-slate-500 mt-1">{RANGES.find((r) => r.value === range)?.label}</div>
           </div>
-          <div className="flex bg-bg-elevated border border-bg-border rounded-md overflow-hidden text-xs">
+          <div className="flex bg-bg-elevated border border-bg-border rounded-md overflow-x-auto text-xs scrollbar-thin max-w-full">
             {RANGES.map((r) => (
               <button key={r.value} onClick={() => setRange(r.value)}
-                className={`px-3 py-1.5 transition ${range === r.value ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-100'}`}>
+                className={`px-2 sm:px-3 py-1.5 transition whitespace-nowrap shrink-0 ${range === r.value ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-100'}`}>
                 {r.label}
               </button>
             ))}

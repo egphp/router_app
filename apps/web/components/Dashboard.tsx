@@ -27,9 +27,9 @@ export function Dashboard() {
   const { data: status } = useSWR<Status>('/api/status', fetcher, { refreshInterval: 5000 });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       <AlertBanner />
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
         <StatCard
           label="Router uptime"
           value={formatDuration(status?.uptime_sec ?? 0)}
@@ -61,12 +61,12 @@ export function Dashboard() {
 
       <LiveSpeedChart />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
         <TopTalkers />
         <CategoryBreakdown />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
         <ConcurrentChart />
         <AnomaliesCard />
       </div>

@@ -19,13 +19,13 @@ export function StatCard({ label, value, hint, icon, tone = 'default' }: Props) 
   }[tone];
 
   return (
-    <div className="card p-5 flex flex-col gap-3 animate-fade-in">
+    <div className="card p-3 sm:p-5 flex flex-col gap-2 sm:gap-3 animate-fade-in">
       <div className="flex items-center justify-between">
-        <div className="stat-label">{label}</div>
-        {icon && <div className="text-slate-500">{icon}</div>}
+        <div className="stat-label truncate">{label}</div>
+        {icon && <div className="text-slate-500 shrink-0">{icon}</div>}
       </div>
-      <div className={clsx('stat-value text-3xl font-bold', toneCls)}>{value}</div>
-      {hint && <div className="text-xs text-slate-400">{hint}</div>}
+      <div className={clsx('text-xl sm:text-2xl lg:text-3xl font-bold tabular-nums truncate', toneCls)}>{value}</div>
+      {hint && <div className="text-[10px] sm:text-xs text-slate-400 truncate">{hint}</div>}
     </div>
   );
 }

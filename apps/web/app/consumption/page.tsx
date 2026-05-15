@@ -65,7 +65,7 @@ export default function ConsumptionPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 animate-fade-in">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 animate-fade-in">
         {PERIODS.map((p) => {
           const v = totals[p.value as keyof typeof totals];
           const active = sortPeriod === p.value;
@@ -79,7 +79,37 @@ export default function ConsumptionPage() {
         })}
       </div>
 
-      <div className="card overflow-hidden animate-fade-in">
+      {/* Mobile card list */}
+      <div className="lg:hidden space-y-2 animate-fade-in">
+        {sorted.map((r) => (
+          <Link key={r.mac} href={`/devices/${encodeURIComponent(r.mac)}`}
+            className="card p-3 block hover:bg-bg-elevated/40">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xl">{categoryIcon(r.category)}</span>
+              <div className="flex-1 min-w-0">
+                <div className="font-medium truncate">{r.label}</div>
+                <div className="text-[10px] text-slate-500 truncate">{r.mac}</div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-[10px] text-slate-500">{PERIODS.find((p) => p.value === sortPeriod)?.label}</div>
+                <div className="text-sm font-bold tabular-nums text-slate-100">{formatBytes((r as any)[`${sortPeriod}_down`] + (r as any)[`${sortPeriod}_up`])}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-5 gap-1 mt-2 text-[10px]">
+              {(['today', 'week', 'month', 'year', 'total'] as Period[]).map((p) => (
+                <div key={p} className={`rounded px-1.5 py-1 text-center ${sortPeriod === p ? 'bg-accent/20 text-accent' : 'bg-bg-elevated text-slate-400'}`}>
+                  <div className="text-[8px] uppercase">{p}</div>
+                  <div className="font-mono tabular-nums">{formatBytes((r as any)[`${p}_down`] + (r as any)[`${p}_up`], 0)}</div>
+                </div>
+              ))}
+            </div>
+          </Link>
+        ))}
+        {sorted.length === 0 && <div className="card p-8 text-center text-slate-500">No devices.</div>}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden lg:block card overflow-hidden animate-fade-in">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-bg-elevated/40 text-xs uppercase tracking-wide text-slate-500">

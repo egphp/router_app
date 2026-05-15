@@ -1,0 +1,19 @@
+[Unit]
+Description=Tenda Router Monitor — poller daemon
+Documentation=https://github.com/egphp/router_app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/router_app
+EnvironmentFile=-%h/router_app/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node packages/poller/dist/index.js
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/router_app/logs/poller.log
+StandardError=append:%h/router_app/logs/poller.err
+
+[Install]
+WantedBy=default.target

@@ -87,8 +87,8 @@ export default function ReportPage() {
       </div>
 
       <div className="card overflow-hidden animate-fade-in">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+        <div className="overflow-x-auto -webkit-overflow-scrolling-touch">
+          <table className="w-full text-xs min-w-[600px]">
             <thead className="bg-bg-elevated/40 text-[10px] uppercase tracking-wide text-slate-500 sticky top-0">
               <tr>
                 <th className="px-3 py-2 text-left min-w-[180px] sticky left-0 bg-bg-card z-10">Device</th>

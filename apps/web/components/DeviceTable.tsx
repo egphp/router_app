@@ -73,35 +73,80 @@ export function DeviceTable() {
 
   return (
     <div className="card overflow-hidden animate-fade-in">
-      <div className="flex flex-wrap items-center gap-3 p-4 border-b border-bg-border">
-        <div className="font-semibold">Devices <span className="text-slate-500 text-sm">({devices.length})</span></div>
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 p-3 sm:p-4 border-b border-bg-border">
+        <div className="font-semibold text-sm sm:text-base">Devices <span className="text-slate-500 text-xs sm:text-sm">({devices.length})</span></div>
         {newCount > 0 && (
-          <span className="text-xs bg-accent-red/20 text-accent-red rounded-full px-2 py-0.5 border border-accent-red/30">
+          <span className="text-[10px] sm:text-xs bg-accent-red/20 text-accent-red rounded-full px-2 py-0.5 border border-accent-red/30">
             🔴 {newCount} new
           </span>
         )}
-        <div className="flex-1" />
+        <div className="flex-1 min-w-0" />
         <input
-          type="text" placeholder="Search name / IP / MAC"
+          type="text" placeholder="Search…"
           value={search} onChange={(e) => setSearch(e.target.value)}
-          className="bg-bg-elevated border border-bg-border rounded-md px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-accent"
+          className="bg-bg-elevated border border-bg-border rounded-md px-2 sm:px-3 py-1.5 text-sm w-full sm:w-56 max-w-full focus:outline-none focus:border-accent"
         />
         <select value={filter} onChange={(e) => setFilter(e.target.value as Filter)}
-          className="bg-bg-elevated border border-bg-border rounded-md px-2 py-1.5 text-sm">
+          className="bg-bg-elevated border border-bg-border rounded-md px-2 py-1.5 text-xs sm:text-sm">
           <option value="all">All</option><option value="online">Online</option>
           <option value="offline">Offline</option><option value="new">New</option>
         </select>
         <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
-          className="bg-bg-elevated border border-bg-border rounded-md px-2 py-1.5 text-sm">
-          <option value="today">Sort by today</option>
-          <option value="total">Sort by total</option>
-          <option value="down">Sort by ↓ speed</option>
-          <option value="up">Sort by ↑ speed</option>
-          <option value="name">Sort by name</option>
-          <option value="last_seen">Sort by last seen</option>
+          className="bg-bg-elevated border border-bg-border rounded-md px-2 py-1.5 text-xs sm:text-sm">
+          <option value="today">Sort: today</option>
+          <option value="total">Sort: total</option>
+          <option value="down">Sort: ↓ speed</option>
+          <option value="up">Sort: ↑ speed</option>
+          <option value="name">Sort: name</option>
+          <option value="last_seen">Sort: last seen</option>
         </select>
       </div>
-      <div className="overflow-x-auto">
+      {/* Mobile card list (< lg) */}
+      <div className="lg:hidden divide-y divide-bg-border">
+        {devices.map((d) => (
+          <div key={d.mac} className={clsx(
+            'p-3 hover:bg-bg-elevated/40',
+            d.is_new === 1 && 'bg-accent-red/5'
+          )}>
+            <div className="flex items-start gap-2.5">
+              <span className="text-xl shrink-0 mt-0.5">{categoryIcon(d.category)}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Link href={`/devices/${encodeURIComponent(d.mac)}`} className="font-medium text-slate-100 hover:text-accent truncate">
+                    {label(d)}
+                  </Link>
+                  {d.is_new === 1 && (
+                    <span className="text-[9px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold leading-none">NEW</span>
+                  )}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${d.online ? 'bg-accent-green/20 text-accent-green' : 'bg-slate-700/40 text-slate-500'}`}>
+                    {d.online ? 'online' : 'offline'}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5 truncate">{d.ip ?? '—'} · {formatMacShort(d.mac)} · {d.vendor || 'Unknown'}</div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-xs">
+                  <div><span className="text-slate-500">↓ now:</span> <span className={d.online && d.down_speed_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>{d.online ? formatBps(d.down_speed_bps) : '—'}</span></div>
+                  <div><span className="text-slate-500">↑ now:</span> <span className={d.online && d.up_speed_bps > 0 ? 'text-orange-400' : 'text-slate-600'}>{d.online ? formatBps(d.up_speed_bps) : '—'}</span></div>
+                  <div><span className="text-slate-500">Today:</span> <span className="text-slate-200 font-medium">{formatBytes(d.bytes_today)}</span></div>
+                  <div><span className="text-slate-500">All-time:</span> <span className="text-slate-100 font-semibold">{formatBytes(d.bytes_total)}</span></div>
+                </div>
+                <div className="flex items-center gap-3 mt-2">
+                  <span className="text-[10px] text-slate-500">{timeAgo(d.last_seen)}</span>
+                  {d.is_new === 1 && (
+                    <button onClick={() => dismissNew(d.mac)}
+                      className="ml-auto text-[10px] px-2 py-1 rounded bg-accent-green/10 text-accent-green border border-accent-green/30">
+                      Mark known
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+        {devices.length === 0 && <div className="p-8 text-center text-slate-500 text-sm">No devices match the current filter.</div>}
+      </div>
+
+      {/* Desktop table (≥ lg) */}
+      <div className="hidden lg:block overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
             <tr>

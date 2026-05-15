@@ -29,9 +29,20 @@ html, body {
     @apply bg-bg-card border border-bg-border rounded-xl;
   }
   .stat-label {
-    @apply text-xs uppercase tracking-wide text-slate-400 font-medium;
+    @apply text-[10px] sm:text-xs uppercase tracking-wide text-slate-400 font-medium;
   }
   .stat-value {
-    @apply text-2xl font-bold text-slate-100;
+    @apply text-xl sm:text-2xl font-bold text-slate-100;
   }
+  .scrollbar-thin::-webkit-scrollbar { height: 4px; width: 4px; }
+}
+
+/* Smooth touch scrolling on mobile horizontal scrollers */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent zoom on input focus on iOS */
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px !important; }
 }

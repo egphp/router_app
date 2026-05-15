@@ -96,7 +96,7 @@ export function SettingsClient() {
             </div>
           )}
 
-          <div className="flex items-center gap-2 pt-2">
+          <div className="flex items-center gap-2 pt-2 flex-wrap">
             <button onClick={() => callApi('test')} disabled={!host || !password || busy !== null}
               className="px-4 py-2 rounded bg-bg-elevated border border-bg-border text-sm hover:bg-bg-border disabled:opacity-50 flex items-center gap-2">
               {busy === 'test' ? <Loader size={14} className="animate-spin" /> : null}

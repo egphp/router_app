@@ -27,7 +27,8 @@ export default function OutagesPage() {
         </div>
       </div>
       <div className="card overflow-hidden animate-fade-in">
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[500px]">
           <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
             <tr>
               <th className="px-4 py-2 text-left">Started</th>
@@ -55,6 +56,7 @@ export default function OutagesPage() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
