@@ -111,17 +111,28 @@ export class SecurityScanner {
       }
     }
 
-    // 5. Suspicious IP ranges (devices on the LAN but using non-DHCP-range IPs)
+    // 5. Suspicious IP ranges. Derive the LAN /24 dynamically from the majority
+    // of devices so the rule works on any router (192.168.0.x, 192.168.5.x, 10.x.x.x...)
+    const subnetCounts = new Map<string, number>();
     for (const d of onlineDevices) {
       const ip = d.hostIP || '';
-      if (ip && !/^192\.168\.0\./.test(ip)) {
-        out.push({
-          rule: 'out_of_subnet',
-          severity: 'warn',
-          mac: d.hostMAC,
-          message: `Device "${d.hostName || d.hostMAC}" reports IP ${ip} outside the LAN subnet`,
-          detail: { ip, mac: d.hostMAC },
-        });
+      const m = ip.match(/^(\d+\.\d+\.\d+)\./);
+      if (m) subnetCounts.set(m[1], (subnetCounts.get(m[1]) ?? 0) + 1);
+    }
+    const dominant = [...subnetCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (dominant && dominant[1] >= 3) {
+      const lanPrefix = dominant[0] + '.';
+      for (const d of onlineDevices) {
+        const ip = d.hostIP || '';
+        if (ip && !ip.startsWith(lanPrefix)) {
+          out.push({
+            rule: 'out_of_subnet',
+            severity: 'warn',
+            mac: d.hostMAC,
+            message: `Device "${d.hostName || d.hostMAC}" reports IP ${ip} outside the LAN subnet (${dominant[0]}.x)`,
+            detail: { ip, mac: d.hostMAC, lan: dominant[0] + '.0/24' },
+          });
+        }
       }
     }
 
