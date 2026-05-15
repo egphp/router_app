@@ -17,5 +17,6 @@ export async function GET() {
     bytes_today_down: snap.bytes_today_down,
     bytes_today_up: snap.bytes_today_up,
     top_device: snap.top_device,
+    top_device_2: snap.top_device_2,
   });
 }

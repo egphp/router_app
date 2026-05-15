@@ -13,9 +13,11 @@ import { CategoryBreakdown } from './CategoryBreakdown';
 import { ConcurrentChart } from './ConcurrentChart';
 import { AnomaliesCard } from './AnomaliesCard';
 import { TelemetryCard } from './TelemetryCard';
+import { TelemetryBar } from './TelemetryBar';
 import { formatBytes, formatDuration } from '../lib/format';
 import { Activity, Download, Bell, Crown, GripVertical, RotateCcw, Lock, Unlock } from 'lucide-react';
 
+interface TopDevice { mac: string; label: string; bytes_down: number }
 interface Status {
   connected: boolean;
   uptime_sec: number;
@@ -23,13 +25,14 @@ interface Status {
   total_devices: number;
   bytes_today_down: number;
   bytes_today_up: number;
-  top_device: { mac: string; label: string; bytes_down: number } | null;
+  top_device: TopDevice | null;
+  top_device_2: TopDevice | null;
   alerts: number;
 }
 
-type WidgetId = 'stats' | 'live-speed' | 'telemetry' | 'top-talkers' | 'category' | 'concurrent' | 'anomalies' | 'devices';
+type WidgetId = 'stats' | 'live-speed' | 'top-talkers' | 'category' | 'concurrent' | 'anomalies' | 'devices';
 
-const DEFAULT_ORDER: WidgetId[] = ['stats', 'live-speed', 'telemetry', 'top-talkers', 'category', 'concurrent', 'anomalies', 'devices'];
+const DEFAULT_ORDER: WidgetId[] = ['stats', 'live-speed', 'top-talkers', 'category', 'concurrent', 'anomalies', 'devices'];
 const STORAGE_KEY = 'tenda.dashboardOrder.v1';
 const EDIT_KEY = 'tenda.dashboardEdit.v1';
 
@@ -53,7 +56,6 @@ function loadOrder(): WidgetId[] {
 const WIDGET_LABELS: Record<WidgetId, string> = {
   stats: 'Status cards',
   'live-speed': 'Live speed',
-  telemetry: 'Router telemetry',
   'top-talkers': 'Top talkers',
   category: 'Traffic by category',
   concurrent: 'Concurrent devices',
@@ -140,13 +142,7 @@ export function Dashboard() {
               hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
               icon={<Download size={16} />}
             />
-            <StatCard
-              label="Top device today"
-              value={status?.top_device ? status.top_device.label : '—'}
-              hint={status?.top_device ? formatBytes(status.top_device.bytes_down) : 'no traffic yet'}
-              icon={<Crown size={16} />}
-              tone="purple"
-            />
+            <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
             <StatCard
               label="Active alerts"
               value={status?.alerts ?? 0}
@@ -158,8 +154,6 @@ export function Dashboard() {
         );
       case 'live-speed':
         return <LiveSpeedChart />;
-      case 'telemetry':
-        return <TelemetryCard />;
       case 'top-talkers':
         return <TopTalkers />;
       case 'category':
@@ -178,6 +172,7 @@ export function Dashboard() {
       <UpdateBanner />
       <NsfwBanner />
       <AlertBanner />
+      <TelemetryBar />
 
       {/* Edit toolbar */}
       <div className="flex items-center justify-end gap-2 -mb-2">
@@ -234,6 +229,42 @@ export function Dashboard() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function TopDevicesCard({ top, second }: { top: TopDevice | null; second: TopDevice | null }) {
+  return (
+    <div className="card p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5 glow-purple">
+      <div className="flex items-start justify-between gap-2">
+        <div className="stat-label truncate">Top devices today</div>
+        <div className="shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500/25 to-fuchsia-700/10 ring-1 ring-purple-500/30 flex items-center justify-center">
+          <Crown size={16} className="text-slate-100" />
+        </div>
+      </div>
+      <div className="space-y-2.5">
+        {[top, second].map((d, i) =>
+          d ? (
+            <div key={d.mac} className="flex items-center gap-2.5">
+              <span className={`text-[11px] font-bold tabular-nums w-4 ${i === 0 ? 'text-fuchsia-300' : 'text-slate-500'}`}>#{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className={`text-sm font-semibold truncate ${i === 0 ? 'bg-gradient-to-br from-fuchsia-300 to-purple-500 bg-clip-text text-transparent' : 'text-slate-200'}`}>
+                  {d.label}
+                </div>
+                <div className="text-[10px] text-slate-500 tabular-nums">{formatBytes(d.bytes_down)}</div>
+              </div>
+            </div>
+          ) : (
+            <div key={`empty-${i}`} className="flex items-center gap-2.5 opacity-40">
+              <span className="text-[11px] font-bold tabular-nums w-4 text-slate-600">#{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-slate-500">—</div>
+                <div className="text-[10px] text-slate-600">no traffic</div>
+              </div>
+            </div>
+          ),
+        )}
+      </div>
     </div>
   );
 }

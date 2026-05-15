@@ -30,6 +30,7 @@ export interface RouterSnapshot {
   bytes_today_down: number;
   bytes_today_up: number;
   top_device: { mac: string; label: string; bytes_down: number } | null;
+  top_device_2: { mac: string; label: string; bytes_down: number } | null;
   alerts_undismissed: number;
 }
 
@@ -103,13 +104,18 @@ export function getRouterSnapshot(): RouterSnapshot {
       SELECT mac, bytes_down FROM traffic_5min WHERE bucket_ts >= ?
       UNION ALL
       SELECT mac, bytes_down FROM traffic_hour WHERE bucket_ts >= ?
-    ) GROUP BY mac ORDER BY bd DESC LIMIT 1
-  `).get(startOfDay, startOfDay) as { mac: string; bd: number } | undefined;
+    ) GROUP BY mac ORDER BY bd DESC LIMIT 2
+  `).all(startOfDay, startOfDay) as Array<{ mac: string; bd: number }>;
 
   let topDevice = null as RouterSnapshot['top_device'];
-  if (topToday) {
-    const d = conn.prepare(`SELECT mac, COALESCE(custom_label, hostname, mac) AS label FROM devices WHERE mac = ?`).get(topToday.mac) as { mac: string; label: string };
-    topDevice = { mac: d.mac, label: d.label, bytes_down: topToday.bd };
+  let topDevice2 = null as RouterSnapshot['top_device'];
+  if (topToday[0]) {
+    const d = conn.prepare(`SELECT mac, COALESCE(custom_label, hostname, mac) AS label FROM devices WHERE mac = ?`).get(topToday[0].mac) as { mac: string; label: string };
+    topDevice = { mac: d.mac, label: d.label, bytes_down: topToday[0].bd };
+  }
+  if (topToday[1]) {
+    const d = conn.prepare(`SELECT mac, COALESCE(custom_label, hostname, mac) AS label FROM devices WHERE mac = ?`).get(topToday[1].mac) as { mac: string; label: string };
+    topDevice2 = { mac: d.mac, label: d.label, bytes_down: topToday[1].bd };
   }
 
   const counts = conn.prepare(`
@@ -126,6 +132,7 @@ export function getRouterSnapshot(): RouterSnapshot {
     bytes_today_down: Number(todayTotals.bytes_down ?? 0),
     bytes_today_up: Number(todayTotals.bytes_up ?? 0),
     top_device: topDevice,
+    top_device_2: topDevice2,
     alerts_undismissed: counts.alerts,
   };
 }
