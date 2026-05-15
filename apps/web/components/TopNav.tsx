@@ -48,71 +48,79 @@ export function TopNav() {
 
   return (
     <>
-      <header className="border-b border-bg-border bg-bg-card/80 backdrop-blur-md sticky top-0 z-30">
-        <div className="max-w-[1600px] mx-auto h-12 sm:h-14 px-3 sm:px-4 lg:px-6 flex items-center gap-2 sm:gap-3 xl:gap-4">
-          {/* Hamburger — visible below xl (1280) */}
+      <header className="sticky top-0 z-30 border-b border-bg-border/60 backdrop-blur-xl"
+        style={{ background: 'linear-gradient(180deg, oklch(0.20 0.04 275 / 0.85) 0%, oklch(0.20 0.04 275 / 0.7) 100%)' }}>
+        <div className="max-w-[1600px] mx-auto h-14 sm:h-16 px-3 sm:px-5 lg:px-7 flex items-center gap-2 sm:gap-3 xl:gap-5">
+          {/* Hamburger */}
           <button
             type="button"
             aria-label="Open menu"
             onClick={() => setOpen(true)}
-            className="xl:hidden p-2 -ml-2 rounded-md hover:bg-bg-elevated text-slate-300 shrink-0"
+            className="xl:hidden p-2 -ml-2 rounded-xl hover:bg-bg-elevated/60 text-text-secondary shrink-0 transition"
           >
             <Menu size={20} />
           </button>
 
-          {/* Logo */}
-          <Link href="/" className="flex items-center gap-2 font-semibold shrink-0">
-            <Activity size={18} className="text-accent shrink-0" />
-            <span className="text-sm sm:text-base whitespace-nowrap">Tenda Monitor</span>
+          {/* Logo — display font + colored dot */}
+          <Link href="/" className="flex items-center gap-2.5 shrink-0 group">
+            <span className="relative flex items-center justify-center w-7 h-7 rounded-xl"
+              style={{ background: 'linear-gradient(135deg, var(--peach), var(--sun))', boxShadow: '0 4px 12px -3px oklch(0.82 0.13 50 / 0.5)' }}>
+              <Activity size={14} strokeWidth={2.5} className="text-[#13162a]" />
+            </span>
+            <span className="font-display text-base sm:text-lg font-semibold tracking-tight whitespace-nowrap">
+              <span className="text-text-primary">Tenda</span>
+              <span className="text-accent-peach italic"> Monitor</span>
+            </span>
           </Link>
 
-          {/* Desktop nav — visible only xl and up */}
-          <nav className="hidden xl:flex items-center gap-0.5 text-sm flex-1 min-w-0 overflow-x-auto scrollbar-thin">
+          {/* Desktop nav */}
+          <nav className="hidden xl:flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto scrollbar-thin ml-2">
             {nav.map((item) => {
               const active = isActive(item.href);
               const Icon = item.icon;
               return (
                 <Link
                   key={item.href} href={item.href}
-                  className={`px-2.5 py-1.5 rounded-md flex items-center gap-1.5 shrink-0 transition whitespace-nowrap ${
-                    active
-                      ? 'bg-accent/15 text-accent'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-bg-elevated/60'
-                  }`}>
+                  className={active ? 'nav-link active flex items-center gap-1.5 whitespace-nowrap' : 'nav-link flex items-center gap-1.5 whitespace-nowrap'}>
                   <Icon size={14} className="shrink-0" />
                   <span>{item.label}</span>
                   {item.label === 'Alerts' && alerts > 0 && (
-                    <span className="ml-0.5 text-[10px] bg-accent-red text-white rounded-full px-1.5 py-0.5 font-semibold leading-none">{alerts}</span>
+                    <span className="ml-1 text-[10px] rounded-full px-1.5 py-0.5 font-semibold leading-none"
+                      style={{ background: active ? 'oklch(0.20 0.04 275 / 0.2)' : 'var(--coral-soft)', color: active ? 'oklch(0.20 0.04 275)' : 'var(--coral)' }}>
+                      {alerts}
+                    </span>
                   )}
                 </Link>
               );
             })}
           </nav>
 
-          {/* Right side — pushed right with ml-auto on smaller, fills space on xl */}
+          {/* Right side */}
           <div className="ml-auto flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* Mobile alerts shortcut */}
             {alerts > 0 && (
               <Link
                 href="/alerts"
                 aria-label={`${alerts} active alerts`}
-                className="xl:hidden relative p-1.5 rounded-md hover:bg-bg-elevated text-slate-300"
+                className="xl:hidden relative p-2 rounded-xl hover:bg-bg-elevated/60 text-text-secondary transition"
               >
                 <Bell size={18} />
-                <span className="absolute -top-0.5 -right-0.5 text-[10px] bg-accent-red text-white rounded-full min-w-[16px] h-4 px-1 font-bold leading-4 text-center">
+                <span className="absolute -top-0.5 -right-0.5 text-[10px] rounded-full min-w-[16px] h-4 px-1 font-bold leading-4 text-center"
+                  style={{ background: 'var(--coral)', color: 'oklch(0.20 0.04 275)' }}>
                   {alerts}
                 </span>
               </Link>
             )}
 
-            {/* Connection pill — full label on sm+, dot only on xs */}
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400 px-2 py-1 rounded-md bg-bg-elevated/60 border border-bg-border">
-              <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-accent-green animate-pulse-slow' : 'bg-accent-red'}`} />
-              <span className="font-medium">{connected ? 'Live' : 'Offline'}</span>
+            <div className="hidden sm:flex items-center gap-2 text-xs px-3 py-1.5 rounded-full"
+              style={{ background: connected ? 'var(--mint-soft)' : 'var(--coral-soft)', border: `1.5px solid ${connected ? 'oklch(0.85 0.13 165 / 0.35)' : 'oklch(0.74 0.18 25 / 0.35)'}` }}>
+              <span className={connected ? 'live-dot' : 'w-1.5 h-1.5 rounded-full bg-accent-coral'} />
+              <span className="font-medium" style={{ color: connected ? 'var(--mint)' : 'var(--coral)' }}>
+                {connected ? 'Live' : 'Offline'}
+              </span>
             </div>
             <span
               aria-label={connected ? 'Connected' : 'Offline'}
-              className={`sm:hidden w-2 h-2 rounded-full ${connected ? 'bg-accent-green' : 'bg-accent-red'}`}
+              className={`sm:hidden w-2 h-2 rounded-full ${connected ? 'bg-accent-mint' : 'bg-accent-coral'}`}
             />
           </div>
         </div>
@@ -126,44 +134,49 @@ export function TopNav() {
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-bg-card border-r border-bg-border z-50 xl:hidden overflow-y-auto animate-fade-in flex flex-col">
-            <div className="flex items-center justify-between px-4 h-12 border-b border-bg-border shrink-0">
-              <div className="flex items-center gap-2 font-semibold">
-                <Activity size={18} className="text-accent" />
-                <span>Tenda Monitor</span>
+          <aside className="fixed inset-y-0 left-0 w-72 max-w-[85vw] z-50 xl:hidden overflow-y-auto animate-slide-up flex flex-col"
+            style={{ background: 'var(--bg-card)', borderRight: '1.5px solid var(--border)' }}>
+            <div className="flex items-center justify-between px-4 h-14 shrink-0" style={{ borderBottom: '1.5px solid var(--border)' }}>
+              <div className="flex items-center gap-2.5">
+                <span className="flex items-center justify-center w-7 h-7 rounded-xl"
+                  style={{ background: 'linear-gradient(135deg, var(--peach), var(--sun))' }}>
+                  <Activity size={14} strokeWidth={2.5} className="text-[#13162a]" />
+                </span>
+                <span className="font-display text-base font-semibold">
+                  <span className="text-text-primary">Tenda</span>
+                  <span className="text-accent-peach italic"> Monitor</span>
+                </span>
               </div>
               <button
                 aria-label="Close menu"
                 onClick={() => setOpen(false)}
-                className="p-1.5 rounded-md hover:bg-bg-elevated text-slate-300"
+                className="p-1.5 rounded-xl hover:bg-bg-elevated text-text-secondary"
               >
                 <X size={20} />
               </button>
             </div>
-            <nav className="p-2 space-y-0.5 flex-1">
+            <nav className="p-3 space-y-1 flex-1">
               {nav.map((item) => {
                 const active = isActive(item.href);
                 const Icon = item.icon;
                 return (
                   <Link
                     key={item.href} href={item.href}
-                    className={`px-3 py-2.5 rounded-md flex items-center gap-3 text-sm ${
-                      active
-                        ? 'bg-accent/15 text-accent border border-accent/30'
-                        : 'text-slate-300 hover:bg-bg-elevated'
-                    }`}>
+                    className={active ? 'nav-link active flex items-center gap-3 text-sm py-2.5 px-3' : 'nav-link flex items-center gap-3 text-sm py-2.5 px-3'}>
                     <Icon size={16} className="shrink-0" />
                     <span className="flex-1">{item.label}</span>
                     {item.label === 'Alerts' && alerts > 0 && (
-                      <span className="text-[10px] bg-accent-red text-white rounded-full px-1.5 py-0.5 font-semibold leading-none">{alerts}</span>
+                      <span className="chip chip-coral text-[10px] px-2 py-0">{alerts}</span>
                     )}
                   </Link>
                 );
               })}
             </nav>
-            <div className="border-t border-bg-border px-4 py-3 text-xs text-slate-400 flex items-center gap-2 shrink-0">
-              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-accent-green animate-pulse-slow' : 'bg-accent-red'}`} />
-              <span>{connected ? 'Connected · Live' : 'Disconnected'}</span>
+            <div className="px-4 py-3 text-xs flex items-center gap-2.5 shrink-0" style={{ borderTop: '1.5px solid var(--border)' }}>
+              <span className={connected ? 'live-dot' : 'w-2 h-2 rounded-full bg-accent-coral'} />
+              <span className="font-medium" style={{ color: connected ? 'var(--mint)' : 'var(--coral)' }}>
+                {connected ? 'Connected · Live' : 'Disconnected'}
+              </span>
             </div>
           </aside>
         </>

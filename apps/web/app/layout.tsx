@@ -1,7 +1,27 @@
 import type { Metadata } from 'next';
+import { Fraunces, Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import { TopNav } from '../components/TopNav';
 import { PrivacyMask } from '../components/PrivacyMask';
+
+const fontDisplay = Fraunces({
+  subsets: ['latin'],
+  variable: '--font-display',
+  display: 'swap',
+  axes: ['opsz', 'SOFT'],
+});
+
+const fontSans = Inter({
+  subsets: ['latin'],
+  variable: '--font-sans',
+  display: 'swap',
+});
+
+const fontMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-mono',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'Tenda Monitor',
@@ -16,7 +36,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${fontDisplay.variable} ${fontSans.variable} ${fontMono.variable}`}>
       <body className="min-h-screen">
         <PrivacyMask />
         <TopNav />

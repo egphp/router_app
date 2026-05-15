@@ -65,14 +65,14 @@ export default function OutagesPage() {
           <tbody>
             {sorted.map((o) => (
               <tr key={o.started_at} className="border-t border-bg-border">
-                <td className={clsx('px-4 py-2.5', sort.key === 'started' && 'bg-accent/5')}>
+                <td className={clsx('px-4 py-2.5', sort.key === 'started' && 'col-sorted')}>
                   <div className="text-slate-200">{new Date(o.started_at).toLocaleString()}</div>
                   <div className="text-xs text-slate-500">{timeAgo(o.started_at)}</div>
                 </td>
-                <td className={clsx('px-4 py-2.5 tabular-nums', sort.key === 'duration' && 'bg-accent/5')}>
+                <td className={clsx('px-4 py-2.5 tabular-nums', sort.key === 'duration' && 'col-sorted')}>
                   {o.ended_at ? formatDuration((o.ended_at - o.started_at) / 1000) : <span className="text-accent-red">ongoing</span>}
                 </td>
-                <td className={clsx('px-4 py-2.5', sort.key === 'reason' && 'bg-accent/5')}>
+                <td className={clsx('px-4 py-2.5', sort.key === 'reason' && 'col-sorted')}>
                   <span className="text-xs bg-bg-elevated rounded px-2 py-1 border border-bg-border">{o.reason}</span>
                 </td>
                 <td className="px-4 py-2.5 text-xs text-slate-500 max-w-md truncate">{o.notes || '—'}</td>

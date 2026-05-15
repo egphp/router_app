@@ -151,14 +151,15 @@ export function Dashboard() {
             label="Router uptime"
             value={formatDuration(status?.uptime_sec ?? 0)}
             hint={status ? `${status.online_count} online of ${status.total_devices} known` : '...'}
-            icon={<Activity size={16} />}
-            tone={status?.connected ? 'green' : 'red'}
+            icon={<Activity size={16} strokeWidth={2.2} />}
+            tone={status?.connected ? 'mint' : 'coral'}
           />
           <StatCard
             label="Today (download)"
             value={formatBytes(status?.bytes_today_down ?? 0)}
             hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
-            icon={<Download size={16} />}
+            icon={<Download size={16} strokeWidth={2.2} />}
+            tone="peach"
           />
           <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
         </div>
@@ -226,31 +227,33 @@ export function Dashboard() {
 
 function TopDevicesCard({ top, second }: { top: TopDevice | null; second: TopDevice | null }) {
   return (
-    <div className="card p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5 glow-purple">
+    <div className="card card-lavender p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5">
       <div className="flex items-start justify-between gap-2">
         <div className="stat-label truncate">Top devices today</div>
-        <div className="shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500/25 to-fuchsia-700/10 ring-1 ring-purple-500/30 flex items-center justify-center">
-          <Crown size={16} className="text-slate-100" />
+        <div className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
+          style={{ background: 'linear-gradient(135deg, var(--lavender-soft), var(--rose) 0%)', border: '1.5px solid oklch(0.78 0.14 295 / 0.4)' }}>
+          <Crown size={16} className="text-accent-lavender" strokeWidth={2.2} />
         </div>
       </div>
       <div className="space-y-2.5">
         {[top, second].map((d, i) =>
           d ? (
             <div key={d.mac} className="flex items-center gap-2.5">
-              <span className={`text-[11px] font-bold tabular-nums w-4 ${i === 0 ? 'text-fuchsia-300' : 'text-slate-500'}`}>#{i + 1}</span>
+              <span className="text-[11px] font-bold tabular-nums w-4 font-display italic"
+                style={{ color: i === 0 ? 'var(--lavender)' : 'var(--text-3)' }}>#{i + 1}</span>
               <div className="min-w-0 flex-1">
-                <div className={`text-sm font-semibold truncate ${i === 0 ? 'bg-gradient-to-br from-fuchsia-300 to-purple-500 bg-clip-text text-transparent' : 'text-slate-200'}`}>
+                <div className="text-sm font-semibold truncate" style={{ color: i === 0 ? 'var(--lavender)' : 'var(--text-2)' }}>
                   {d.label}
                 </div>
-                <div className="text-[10px] text-slate-500 tabular-nums">{formatBytes(d.bytes_down)}</div>
+                <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-3)' }}>{formatBytes(d.bytes_down)}</div>
               </div>
             </div>
           ) : (
             <div key={`empty-${i}`} className="flex items-center gap-2.5 opacity-40">
-              <span className="text-[11px] font-bold tabular-nums w-4 text-slate-600">#{i + 1}</span>
+              <span className="text-[11px] font-bold tabular-nums w-4 font-display italic" style={{ color: 'var(--text-3)' }}>#{i + 1}</span>
               <div className="min-w-0 flex-1">
-                <div className="text-sm text-slate-500">—</div>
-                <div className="text-[10px] text-slate-600">no traffic</div>
+                <div className="text-sm" style={{ color: 'var(--text-3)' }}>—</div>
+                <div className="text-[10px]" style={{ color: 'var(--text-3)' }}>no traffic</div>
               </div>
             </div>
           ),
@@ -268,28 +271,34 @@ function CategoryStatCard() {
   const total = rows.reduce((s, r) => s + r.bytes_down + r.bytes_up, 0);
   const top3 = rows.slice(0, 3);
   return (
-    <div className="card p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5">
+    <div className="card card-mint p-4 sm:p-5 flex flex-col gap-3 animate-fade-in transition-all hover:-translate-y-0.5">
       <div className="flex items-start justify-between gap-2">
         <div className="stat-label truncate">Traffic by category</div>
-        <div className="shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500/25 to-blue-700/10 ring-1 ring-cyan-500/30 flex items-center justify-center">
-          <PieChart size={16} className="text-slate-100" />
+        <div className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
+          style={{ background: 'linear-gradient(135deg, var(--mint-soft), var(--ice) 0%)', border: '1.5px solid oklch(0.85 0.13 165 / 0.4)' }}>
+          <PieChart size={16} className="text-accent-mint" strokeWidth={2.2} />
         </div>
       </div>
       <div className="space-y-1.5">
         {top3.length === 0 ? (
-          <div className="text-sm text-slate-500">no data</div>
-        ) : top3.map((r) => {
+          <div className="text-sm" style={{ color: 'var(--text-3)' }}>no data</div>
+        ) : top3.map((r, i) => {
           const pct = total > 0 ? ((r.bytes_down + r.bytes_up) / total) * 100 : 0;
+          const gradient = [
+            'linear-gradient(90deg, var(--mint), var(--ice))',
+            'linear-gradient(90deg, var(--peach), var(--sun))',
+            'linear-gradient(90deg, var(--lavender), var(--rose))',
+          ][i];
           return (
             <div key={r.category} className="flex items-center gap-2 text-xs">
               <span className="text-base shrink-0">{categoryIcon(r.category)}</span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-slate-200 truncate capitalize">{r.category}</span>
-                  <span className="text-slate-400 tabular-nums shrink-0">{formatBytes(r.bytes_down + r.bytes_up, 0)}</span>
+                  <span className="truncate capitalize" style={{ color: 'var(--text)' }}>{r.category}</span>
+                  <span className="tabular-nums shrink-0" style={{ color: 'var(--text-2)' }}>{formatBytes(r.bytes_down + r.bytes_up, 0)}</span>
                 </div>
-                <div className="h-1 bg-bg-border rounded mt-0.5 overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-cyan-400 to-blue-500" style={{ width: `${pct}%` }} />
+                <div className="h-1 rounded-full mt-1 overflow-hidden" style={{ background: 'oklch(0.20 0.04 275 / 0.5)' }}>
+                  <div className="h-full rounded-full" style={{ width: `${pct}%`, background: gradient }} />
                 </div>
               </div>
             </div>

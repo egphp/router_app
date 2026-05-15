@@ -181,7 +181,7 @@ export default function ConsumptionPage() {
                       </div>
                     </Link>
                   </td>
-                  <td className={clsx('px-3 py-2.5 text-right tabular-nums leading-tight', (sort.key === 'now_down' || sort.key === 'now_up') && 'bg-accent/5')}>
+                  <td className={clsx('px-3 py-2.5 text-right tabular-nums leading-tight', (sort.key === 'now_down' || sort.key === 'now_up') && 'col-sorted')}>
                     {r.online ? (
                       <>
                         <div className={r.now_down_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>↓ {formatBps(r.now_down_bps)}</div>
@@ -224,7 +224,7 @@ function Th({ label, active, indicator, onClick, hint }: {
 function ConsumptionCell({ down, up, highlight }: { down: number; up: number; highlight?: boolean }) {
   const total = down + up;
   return (
-    <td className={`px-3 py-2.5 text-right tabular-nums ${highlight ? 'font-semibold text-slate-100 bg-accent/5' : 'text-slate-300'}`}>
+    <td className={`px-3 py-2.5 text-right tabular-nums ${highlight ? 'font-semibold col-sorted' : 'text-slate-300'}`}>
       <div>{formatBytes(total)}</div>
       <div className="text-[10px] text-slate-500">↓{formatBytes(down, 0)} ↑{formatBytes(up, 0)}</div>
     </td>

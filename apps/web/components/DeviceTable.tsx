@@ -183,11 +183,11 @@ export function DeviceTable() {
 
       {/* Desktop table (≥ lg) */}
       <div className="hidden lg:block overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
+        <table className="table-aurora">
+          <thead>
             <tr>
               <Th label="Device" active={sort.key === 'name'} indicator={indicator('name')} onClick={() => onSort('name', 'asc')} align="left" />
-              <th className="px-4 py-2 text-left">Address</th>
+              <th className="text-left" style={{ padding: '12px 16px', fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-3)', fontWeight: 600 }}>Address</th>
               <Th
                 label="Now"
                 active={sort.key === 'down' || sort.key === 'up'}
@@ -198,7 +198,7 @@ export function DeviceTable() {
               <Th label="Today" active={sort.key === 'today'} indicator={indicator('today')} onClick={() => onSort('today', 'desc')} />
               <Th label="All-time" active={sort.key === 'total'} indicator={indicator('total')} onClick={() => onSort('total', 'desc')} />
               <Th label="Last seen" active={sort.key === 'last_seen'} indicator={indicator('last_seen')} onClick={() => onSort('last_seen', 'desc')} />
-              <th className="px-4 py-2"></th>
+              <th style={{ padding: '12px 16px' }}></th>
             </tr>
           </thead>
           <tbody>
@@ -207,7 +207,7 @@ export function DeviceTable() {
                 'border-t border-bg-border hover:bg-bg-elevated/40 transition',
                 d.is_new === 1 && 'bg-accent-red/5'
               )}>
-                <td className={clsx('px-4 py-2.5', sort.key === 'name' && 'bg-accent/5')}>
+                <td className={clsx('px-4 py-2.5', sort.key === 'name' && 'col-sorted')}>
                   <div className="flex items-center gap-2">
                     <span className="text-lg">{categoryIcon(d.category)}</span>
                     <div>
@@ -225,7 +225,7 @@ export function DeviceTable() {
                   <div className="text-slate-300">{d.ip ?? '—'}</div>
                   <div className="text-xs text-slate-500">{formatMacShort(d.mac)}</div>
                 </td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums', (sort.key === 'down' || sort.key === 'up') && 'bg-accent/5')}>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums', (sort.key === 'down' || sort.key === 'up') && 'col-sorted')}>
                   {d.online ? (
                     <div className="leading-tight">
                       <div className={d.down_speed_bps > 0 ? 'text-blue-400' : 'text-slate-600'}>↓ {formatBps(d.down_speed_bps)}</div>
@@ -233,9 +233,9 @@ export function DeviceTable() {
                     </div>
                   ) : <span className="text-slate-600">offline</span>}
                 </td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort.key === 'today' && 'bg-accent/5 font-semibold')}>{formatBytes(d.bytes_today)}</td>
-                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort.key === 'total' && 'bg-accent/5')}>{formatBytes(d.bytes_total)}</td>
-                <td className={clsx('px-4 py-2.5 text-right text-xs text-slate-500', sort.key === 'last_seen' && 'bg-accent/5')}>{timeAgo(d.last_seen)}</td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort.key === 'today' && 'col-sorted font-semibold')}>{formatBytes(d.bytes_today)}</td>
+                <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort.key === 'total' && 'col-sorted')}>{formatBytes(d.bytes_total)}</td>
+                <td className={clsx('px-4 py-2.5 text-right text-xs text-slate-500', sort.key === 'last_seen' && 'col-sorted')}>{timeAgo(d.last_seen)}</td>
                 <td className="px-4 py-2.5 text-right">
                   {d.is_new === 1 && (
                     <button onClick={() => dismissNew(d.mac)}
@@ -269,9 +269,9 @@ function Th({ label, active, indicator, onClick, align = 'right', hint }: {
       onClick={onClick}
       title={hint ?? `Sort by ${label}`}
       className={clsx(
-        'px-4 py-2 cursor-pointer select-none hover:text-slate-200 transition',
+        'th-sortable',
         align === 'left' ? 'text-left' : 'text-right',
-        active && 'text-accent'
+        active && 'active'
       )}
     >
       {label}{indicator}
