@@ -18,6 +18,7 @@ function resolveRepoRoot(): string {
 
 export async function GET() {
   const root = resolveRepoRoot();
+  const adminMode = fs.existsSync(path.join(root, '.admin'));
   let local = '';
   let remote = '';
   let lastFetch: number | null = null;
@@ -49,5 +50,6 @@ export async function GET() {
     updateAvailable: local && remote ? local !== remote : false,
     lastFetch,
     lastUpdate,
+    adminMode,
   });
 }

@@ -15,6 +15,12 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 cd "$APP_DIR"
 
+# Bail if this is the admin/dev instance
+if [[ -f "$APP_DIR/.admin" ]]; then
+  # Silent: this is the dev box and we don't want to spam its log
+  exit 0
+fi
+
 # Bail if not a git checkout
 if [[ ! -d .git ]]; then
   log "not a git checkout, skipping"

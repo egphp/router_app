@@ -302,6 +302,6 @@ Built by reverse-engineering the Tenda W30E web UI's XHR calls. Cross-referenced
 
 If the project saves you time, bandwidth, or frustration, support helps continued development:
 
-- ☕ [**Donate via PayPal / card**](https://github.com/egphp/iptv-manager-updates#support--%D8%A7%D9%84%D8%AF%D8%B9%D9%85)
+- ☕ [**Donate via PayPal / card**](https://www.paypal.com/ncp/payment/GYPXYRC3MJ85C)
 - ⭐ Star the repo on GitHub — costs nothing, helps a lot
 - 🐛 Open issues / PRs with improvements for new Tenda firmwares
