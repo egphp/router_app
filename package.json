@@ -1,0 +1,22 @@
+{
+  "name": "tenda-traffic",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev:poller": "pnpm --filter @tenda/poller dev",
+    "dev:web": "pnpm --filter @tenda/web dev",
+    "build": "pnpm -r build",
+    "build:poller": "pnpm --filter @tenda/poller build",
+    "build:web": "pnpm --filter @tenda/web build",
+    "start:poller": "pnpm --filter @tenda/poller start",
+    "start:web": "pnpm --filter @tenda/web start",
+    "migrate": "pnpm --filter @tenda/shared migrate"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+  }
+}

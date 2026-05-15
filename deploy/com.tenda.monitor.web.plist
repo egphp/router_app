@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.tenda.monitor.web</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/node</string>
+      <string>/Users/michaeltawfik/Documents/tenda_traffic/node_modules/.pnpm/next@15.5.18_react-dom@19.2.6_react@19.2.6__react@19.2.6/node_modules/next/dist/bin/next</string>
+      <string>start</string>
+      <string>-p</string>
+      <string>3030</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/michaeltawfik/Documents/tenda_traffic/apps/web</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+      <key>NODE_ENV</key>
+      <string>production</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/michaeltawfik/Library/Logs/tenda-monitor/web.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/michaeltawfik/Library/Logs/tenda-monitor/web.error.log</string>
+  </dict>
+</plist>
