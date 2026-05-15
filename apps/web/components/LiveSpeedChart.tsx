@@ -34,8 +34,8 @@ export function LiveSpeedChart() {
   const errored = !!error && rows.length === 0;
 
   return (
-    <div className="card p-4 sm:p-5 animate-fade-in">
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+    <div className="card p-4 sm:p-5 animate-fade-in flex flex-col h-full">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div className="min-w-0">
           <div className="stat-label flex items-center gap-2">
             Live Speed
@@ -43,14 +43,13 @@ export function LiveSpeedChart() {
             {data !== undefined && !error && <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" />}
             {error && <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse" title="last fetch failed; showing cached data" />}
           </div>
-          <div className="text-[11px] sm:text-xs text-slate-500 mt-1">Last 60 minutes · all devices · refresh 10s</div>
         </div>
-        <div className="flex items-center gap-3 text-[11px] sm:text-xs shrink-0">
-          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-400"></span>Download</span>
-          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400"></span>Upload</span>
+        <div className="flex items-center gap-2 text-[10px] sm:text-[11px] shrink-0">
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>Download</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>Upload</span>
         </div>
       </div>
-      <div className="h-32 sm:h-40">
+      <div className="flex-1 min-h-[80px]">
         {errored ? (
           <div className="h-full flex items-center justify-center text-slate-500 text-sm">
             Could not load speed data. Will retry automatically.

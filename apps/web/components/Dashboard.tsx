@@ -145,8 +145,8 @@ export function Dashboard() {
       <TelemetryBar />
 
       {/* Fixed status row — always first, not reorderable. Stats on left, Live Speed on right */}
-      <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,5fr)_minmax(0,3fr)] gap-3 sm:gap-4">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3 self-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-3 sm:gap-4 items-stretch">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
           <StatCard
             label="Router uptime"
             value={formatDuration(status?.uptime_sec ?? 0)}
@@ -161,14 +161,6 @@ export function Dashboard() {
             icon={<Download size={16} />}
           />
           <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
-          <StatCard
-            label="Active alerts"
-            value={status?.alerts ?? 0}
-            hint={status?.alerts ? 'see Alerts page' : 'all clear'}
-            icon={<Bell size={16} />}
-            tone={status && status.alerts > 0 ? 'red' : 'default'}
-          />
-          <CategoryStatCard />
         </div>
         <LiveSpeedChart />
       </div>
