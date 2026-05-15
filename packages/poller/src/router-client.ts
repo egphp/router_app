@@ -13,11 +13,36 @@ export class AuthError extends Error {
   constructor(msg: string) { super(msg); this.name = 'AuthError'; }
 }
 
+interface RawResp {
+  status: number;
+  text: string;
+  setCookie: string | null;
+  location: string | null;
+  contentType: string | null;
+  redirected: boolean;
+}
+
 export class RouterClient {
   private cookie: string | null = null;
   private inFlightLogin: Promise<void> | null = null;
+  private host: string;
+  private password: string;
+  private lastSuccessfulRequestTs = 0;
 
-  constructor(private readonly host: string, private readonly password: string) {}
+  constructor(host: string, password: string) {
+    this.host = host;
+    this.password = password;
+  }
+
+  /** Update credentials live (used by /api/settings). Forces re-login on next call. */
+  setCredentials(host: string, password: string): void {
+    this.host = host;
+    this.password = password;
+    this.cookie = null;
+    log.info('router: credentials updated, forcing re-login on next call', { host });
+  }
+
+  getHost(): string { return this.host; }
 
   private get baseUrl(): string {
     return `http://${this.host}`;
@@ -28,12 +53,13 @@ export class RouterClient {
       'Content-Type': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
       'Accept': 'text/plain, */*; q=0.01',
+      'Referer': `${this.baseUrl}/index.html?v=5042`,
     };
     if (this.cookie) h.Cookie = this.cookie;
     return h;
   }
 
-  private async rawPost(url: string, body: unknown, timeoutMs = 10000): Promise<{ status: number; text: string; setCookie: string | null }> {
+  private async rawPost(url: string, body: unknown, timeoutMs = 10000): Promise<RawResp> {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
@@ -42,12 +68,31 @@ export class RouterClient {
         headers: this.buildHeaders(),
         body: JSON.stringify(body),
         signal: ctrl.signal,
+        // Allow redirects so we always read a real body. We detect session-expiry from body shape.
+        redirect: 'follow',
       });
       const text = await resp.text();
-      return { status: resp.status, text, setCookie: resp.headers.get('set-cookie') };
+      return {
+        status: resp.status,
+        text,
+        setCookie: resp.headers.get('set-cookie'),
+        location: resp.headers.get('location'),
+        contentType: resp.headers.get('content-type'),
+        redirected: resp.redirected,
+      };
     } finally {
       clearTimeout(t);
     }
+  }
+
+  private isSessionExpired(resp: RawResp): boolean {
+    if (resp.status === 401) return true;
+    if (resp.redirected) return true;
+    // Tenda routes expired-session calls through /login.html; the body becomes HTML.
+    const trimmed = resp.text.trimStart();
+    if (trimmed.startsWith('<')) return true;
+    if (resp.text.length > 0 && resp.text.length < 5000 && /login\.html/i.test(resp.text)) return true;
+    return false;
   }
 
   async login(): Promise<void> {
@@ -57,7 +102,15 @@ export class RouterClient {
       const time = timeString();
       const url = '/goform/module?auth&';
       const body = { auth: { password, time } };
-      const resp = await this.rawPost(url, body);
+      const savedCookie = this.cookie;
+      this.cookie = null;
+      let resp: RawResp;
+      try {
+        resp = await this.rawPost(url, body);
+      } catch (err) {
+        this.cookie = savedCookie;
+        throw err;
+      }
       const parsed = safeJson(resp.text);
       if (parsed?.auth !== 0) {
         throw new AuthError(`Login failed: status=${resp.status} body=${resp.text.slice(0, 200)}`);
@@ -67,11 +120,12 @@ export class RouterClient {
         if (sid) {
           this.cookie = `bLanguage=en; sessionid=${sid}`;
           log.info('router: logged in', { sessionid: sid });
+          this.lastSuccessfulRequestTs = Date.now();
+          return;
         }
-      } else if (!this.cookie) {
-        this.cookie = 'bLanguage=en';
-        log.warn('router: login response had no Set-Cookie; proceeding optimistically');
       }
+      this.cookie = savedCookie ?? 'bLanguage=en';
+      log.warn('router: login response had no Set-Cookie; reusing existing cookie');
     })();
     try {
       await this.inFlightLogin;
@@ -84,13 +138,21 @@ export class RouterClient {
     if (!this.cookie) await this.login();
     const url = `/goform/module?${modules.join('&')}&`;
     let resp = await this.rawPost(url, body);
-    // 401 (or HTML login redirect) → re-auth and retry once
-    if (resp.status === 401 || /login\.html/i.test(resp.text)) {
-      log.warn('router: session expired, re-logging in');
+
+    if (this.isSessionExpired(resp)) {
+      log.warn('router: session expired, re-logging in', {
+        status: resp.status,
+        redirected: resp.redirected,
+        bodyHead: resp.text.slice(0, 80).replace(/\s+/g, ' '),
+      });
       this.cookie = null;
       await this.login();
       resp = await this.rawPost(url, body);
+      if (this.isSessionExpired(resp)) {
+        throw new AuthError(`re-auth did not restore session`);
+      }
     }
+
     if (resp.status !== 200) {
       throw new Error(`router POST ${url} HTTP ${resp.status}: ${resp.text.slice(0, 200)}`);
     }
@@ -98,6 +160,7 @@ export class RouterClient {
     if (!parsed) {
       throw new Error(`router POST ${url} non-JSON response: ${resp.text.slice(0, 200)}`);
     }
+    this.lastSuccessfulRequestTs = Date.now();
     return parsed as T;
   }
 
@@ -113,6 +176,27 @@ export class RouterClient {
     );
     return r.getQosUserList ?? [];
   }
+
+  /** Lightweight call used as keepalive when sampler is idle. */
+  async ping(): Promise<RouterSystemStatus> {
+    return this.getSystemStatus();
+  }
+
+  /** Attempts to read router system log via firmware endpoint. */
+  async getSystemLog(): Promise<string[]> {
+    try {
+      const r = await this.call<{ getSysLog?: any; getLogInfo?: any }>(
+        ['getSysLog'],
+        { getSysLog: '' },
+      );
+      const log = r.getSysLog || r.getLogInfo;
+      if (typeof log === 'string') return log.split(/\r?\n/).filter(Boolean);
+      if (Array.isArray(log)) return log.map(String);
+      return [];
+    } catch (e) {
+      return [];
+    }
+  }
 }
 
 function safeJson(s: string): any {
@@ -120,7 +204,6 @@ function safeJson(s: string): any {
 }
 
 function parseCookieValue(setCookie: string, key: string): string | null {
-  // set-cookie may have multiple cookies comma-separated; pick the segment containing `key=`
   const segments = setCookie.split(/,(?=[^;]+=)/);
   for (const seg of segments) {
     const m = seg.match(new RegExp(`(?:^|; )${key}=([^;]+)`));

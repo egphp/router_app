@@ -1,50 +1,133 @@
 'use client';
+import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
-import { Bell, Smartphone, WifiOff, RefreshCw } from 'lucide-react';
+import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter } from 'lucide-react';
 
 interface Alert {
   id: number; kind: string; mac: string | null; payload: string | null;
   created_at: number; dismissed_at: number | null; device_label: string | null;
 }
 
+const KINDS = [
+  { value: 'all', label: 'All alerts' },
+  { value: 'new_device', label: 'New devices' },
+  { value: 'outage', label: 'Outages' },
+  { value: 'reboot', label: 'Reboots' },
+  { value: 'security', label: 'Security' },
+];
+
 export default function AlertsPage() {
   const { data, mutate } = useSWR<{ alerts: Alert[] }>('/api/alerts', fetcher, { refreshInterval: 10000 });
-  const alerts = data?.alerts ?? [];
+  const [filter, setFilter] = useState<string>('all');
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const dismiss = async (id: number) => {
+  const filtered = useMemo(() => {
+    let list = data?.alerts ?? [];
+    if (!showDismissed) list = list.filter((a) => a.dismissed_at === null);
+    if (filter !== 'all') list = list.filter((a) => a.kind === filter);
+    return list;
+  }, [data, filter, showDismissed]);
+
+  const counts = useMemo(() => {
+    const list = data?.alerts ?? [];
+    const active = list.filter((a) => a.dismissed_at === null);
+    const byKind: Record<string, number> = {};
+    for (const a of active) byKind[a.kind] = (byKind[a.kind] ?? 0) + 1;
+    return { total: active.length, byKind };
+  }, [data]);
+
+  const callApi = async (action: string, extra: Record<string, any> = {}) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await fetch('/api/alerts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...extra }),
+      });
+      mutate();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dismissOne = async (id: number) => {
     await fetch('/api/alerts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
     mutate();
   };
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Alerts</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Alerts</h1>
+        <div className="flex items-center gap-2">
+          <button onClick={() => callApi('mark_all_known')} disabled={busy || (counts.byKind.new_device ?? 0) === 0}
+            className="px-3 py-1.5 rounded bg-accent-green/10 border border-accent-green/30 text-accent-green text-sm hover:bg-accent-green/20 disabled:opacity-40 flex items-center gap-1.5">
+            <CheckSquare size={14} /> Mark all known
+            {counts.byKind.new_device > 0 && <span className="text-xs bg-accent-green/20 px-1.5 rounded">{counts.byKind.new_device}</span>}
+          </button>
+          <button onClick={() => callApi('dismiss_all')} disabled={busy || counts.total === 0}
+            className="px-3 py-1.5 rounded bg-bg-elevated border border-bg-border text-sm hover:bg-bg-border disabled:opacity-40 flex items-center gap-1.5">
+            <X size={14} /> Dismiss all
+            {counts.total > 0 && <span className="text-xs bg-bg-border px-1.5 rounded">{counts.total}</span>}
+          </button>
+        </div>
+      </div>
+
+      <div className="card p-3 flex items-center gap-2 animate-fade-in">
+        <Filter size={14} className="text-slate-500" />
+        <div className="flex gap-1 flex-wrap">
+          {KINDS.map((k) => (
+            <button key={k.value} onClick={() => setFilter(k.value)}
+              className={`px-3 py-1 rounded text-xs ${filter === k.value ? 'bg-accent text-white' : 'bg-bg-elevated text-slate-400 hover:text-slate-100'}`}>
+              {k.label}
+              {k.value !== 'all' && counts.byKind[k.value] > 0 && (
+                <span className="ml-1.5 text-[10px] bg-black/30 rounded px-1">{counts.byKind[k.value]}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1" />
+        <label className="text-xs text-slate-400 flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={showDismissed} onChange={(e) => setShowDismissed(e.target.checked)}
+            className="accent-blue-500" />
+          Show dismissed
+        </label>
+      </div>
+
       <div className="space-y-2">
-        {alerts.length === 0 && (
-          <div className="card p-8 text-center text-slate-500 animate-fade-in">No alerts.</div>
+        {filtered.length === 0 && (
+          <div className="card p-8 text-center text-slate-500 animate-fade-in">No alerts match the current filter.</div>
         )}
-        {alerts.map((a) => {
+        {filtered.map((a) => {
           const payload = a.payload ? safeParse(a.payload) : null;
           const isDismissed = !!a.dismissed_at;
+          const tone = severityTone(a.kind, payload);
           return (
-            <div key={a.id} className={`card p-4 flex items-start gap-3 animate-fade-in ${isDismissed ? 'opacity-50' : ''}`}>
-              <div className="mt-1">
-                {a.kind === 'new_device' && <Smartphone className="text-accent-red" size={18} />}
-                {a.kind === 'outage' && <WifiOff className="text-accent-amber" size={18} />}
-                {a.kind === 'reboot' && <RefreshCw className="text-accent-purple" size={18} />}
-              </div>
-              <div className="flex-1">
+            <div key={a.id} className={`card p-4 flex items-start gap-3 animate-fade-in border-l-4 ${tone.border} ${isDismissed ? 'opacity-50' : ''}`}>
+              <div className="mt-0.5">{iconFor(a.kind, tone.color)}</div>
+              <div className="flex-1 min-w-0">
                 <div className="font-medium">{titleFor(a, payload)}</div>
                 <div className="text-xs text-slate-500 mt-1">
                   {a.mac && <span>MAC {formatMacShort(a.mac)} · </span>}
                   {timeAgo(a.created_at)}
+                  {payload?.detail?.ip && <span> · {payload.detail.ip}</span>}
+                  {payload?.severity && (
+                    <span className={`ml-2 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${tone.badge}`}>
+                      {payload.severity}
+                    </span>
+                  )}
                 </div>
-                {payload && <pre className="mt-2 text-[10px] text-slate-500 whitespace-pre-wrap font-mono">{JSON.stringify(payload, null, 2)}</pre>}
+                {payload?.message && <div className="text-sm mt-1 text-slate-300">{payload.message}</div>}
+                {payload?.detail && (
+                  <pre className="mt-2 text-[10px] text-slate-500 whitespace-pre-wrap font-mono">{JSON.stringify(payload.detail, null, 2)}</pre>
+                )}
               </div>
               {!isDismissed && (
-                <button onClick={() => dismiss(a.id)}
+                <button onClick={() => dismissOne(a.id)}
                   className="text-xs px-3 py-1.5 rounded bg-bg-elevated border border-bg-border hover:bg-bg-border">
                   Dismiss
                 </button>
@@ -64,10 +147,32 @@ function titleFor(a: Alert, payload: any): string {
     case 'new_device':
       return `New device: ${a.device_label || payload?.hostname || a.mac}`;
     case 'outage':
-      return `Router unreachable (${payload?.reason ?? 'unknown'})`;
+      return `Router unreachable`;
     case 'reboot':
       return 'Router rebooted';
+    case 'security':
+      return payload?.message || `Security: ${payload?.rule}`;
     default:
       return a.kind;
   }
+}
+
+function iconFor(kind: string, color: string) {
+  const props = { size: 18, className: color };
+  switch (kind) {
+    case 'new_device': return <Smartphone {...props} />;
+    case 'outage': return <WifiOff {...props} />;
+    case 'reboot': return <RefreshCw {...props} />;
+    case 'security': return <Shield {...props} />;
+    default: return <Bell {...props} />;
+  }
+}
+
+function severityTone(kind: string, payload: any) {
+  const sev = payload?.severity;
+  if (sev === 'critical' || kind === 'outage') return { border: 'border-l-accent-red', color: 'text-accent-red', badge: 'bg-accent-red/20 text-accent-red' };
+  if (sev === 'warn' || kind === 'reboot') return { border: 'border-l-accent-amber', color: 'text-accent-amber', badge: 'bg-accent-amber/20 text-accent-amber' };
+  if (kind === 'new_device') return { border: 'border-l-accent-red', color: 'text-accent-red', badge: 'bg-accent-red/20 text-accent-red' };
+  if (kind === 'security') return { border: 'border-l-accent-purple', color: 'text-accent-purple', badge: 'bg-accent-purple/20 text-accent-purple' };
+  return { border: 'border-l-accent', color: 'text-accent', badge: 'bg-accent/20 text-accent' };
 }

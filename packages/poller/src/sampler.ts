@@ -4,7 +4,8 @@ import { Accumulator } from './accumulator.js';
 import { OutageMonitor } from './outage.js';
 import { RollupWorker } from './rollup.js';
 import { IpcBroadcaster } from './ipc.js';
-import { parseRouterUptime, MIN, HOUR, DAY } from '@tenda/shared';
+import { SecurityScanner } from './security.js';
+import { parseRouterUptime, MIN } from '@tenda/shared';
 import { log } from './logger.js';
 
 export class Sampler {
@@ -14,6 +15,7 @@ export class Sampler {
   private accumulator: Accumulator;
   private outage: OutageMonitor;
   private rollup: RollupWorker;
+  private security: SecurityScanner;
 
   private insertRouterState: Database.Statement;
 
@@ -26,6 +28,7 @@ export class Sampler {
     this.accumulator = new Accumulator(db);
     this.outage = new OutageMonitor(db);
     this.rollup = new RollupWorker(db);
+    this.security = new SecurityScanner(db);
     this.insertRouterState = db.prepare(`
       INSERT OR REPLACE INTO router_state (ts, uptime_sec, is_reboot, online_count) VALUES (?, ?, ?, ?)
     `);
@@ -65,6 +68,12 @@ export class Sampler {
       const devices = await this.router.getDeviceList();
       const result = this.accumulator.process(now, devices, isReboot);
 
+      // Security checks every cycle (with internal dedupe).
+      const sec = this.security.scan(now, devices);
+      if (sec.length > 0) {
+        log.warn('security checks fired', { count: sec.length, rules: [...new Set(sec.map(s => s.rule))] });
+      }
+
       this.outage.recordSuccess(now);
       this.ipc.broadcast({ type: 'samples-updated', ts: now, deviceCount: result.deviceCount });
       if (result.newDevices.length > 0) {
@@ -94,7 +103,6 @@ export class Sampler {
       this.rollup.rollupHour(now);
       this.rollup.rollupDay(now);
       this.rollup.rollupMonth(now);
-      // Prune nightly (around 03:00 local) — cheap to call every 5 min, just gates on hour
       const h = new Date().getHours();
       if (h === 3) this.rollup.pruneOld(now);
     } catch (e) {

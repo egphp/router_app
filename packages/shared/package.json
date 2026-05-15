@@ -28,7 +28,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp -R src/migrations dist/migrations",
+    "build": "tsc -p tsconfig.json && rm -rf dist/migrations && mkdir -p dist/migrations && cp src/migrations/*.sql dist/migrations/",
     "dev": "tsc -p tsconfig.json --watch",
     "migrate": "node dist/migrate.js"
   },

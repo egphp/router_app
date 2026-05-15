@@ -261,6 +261,18 @@ export function dismissAlert(id: number) {
   return db().prepare(`UPDATE alerts SET dismissed_at = ? WHERE id = ? AND dismissed_at IS NULL`).run(Date.now(), id);
 }
 
+export function dismissAllAlerts() {
+  return db().prepare(`UPDATE alerts SET dismissed_at = ? WHERE dismissed_at IS NULL`).run(Date.now());
+}
+
+export function markAllDevicesKnown() {
+  return db().prepare(`UPDATE devices SET is_new = 0, updated_at = ? WHERE is_new = 1`).run(Date.now());
+}
+
+export function dismissAlertsByKind(kind: string) {
+  return db().prepare(`UPDATE alerts SET dismissed_at = ? WHERE dismissed_at IS NULL AND kind = ?`).run(Date.now(), kind);
+}
+
 export function updateDevice(mac: string, fields: { custom_label?: string | null; category?: string | null; notes?: string | null; is_new?: 0 | 1 }) {
   const setClauses: string[] = [];
   const values: Record<string, unknown> = { mac, now: Date.now() };
@@ -274,6 +286,153 @@ export function updateDevice(mac: string, fields: { custom_label?: string | null
 
 export function getDevice(mac: string) {
   return db().prepare(`SELECT * FROM devices WHERE mac = ?`).get(mac);
+}
+
+/** Per-hour-of-week heatmap: 24h × 7d grid (avg bytes/sec). */
+export function getHeatmap(mac: string | null, days = 14): { dow: number; hour: number; bytes: number }[] {
+  const conn = db();
+  const since = Date.now() - days * DAY;
+  const sql = mac
+    ? `SELECT bucket_ts, bytes_down, bytes_up FROM traffic_hour WHERE mac = ? AND bucket_ts >= ? ORDER BY bucket_ts`
+    : `SELECT bucket_ts, SUM(bytes_down) AS bytes_down, SUM(bytes_up) AS bytes_up FROM traffic_hour WHERE bucket_ts >= ? GROUP BY bucket_ts ORDER BY bucket_ts`;
+  const rows = mac
+    ? (conn.prepare(sql).all(mac, since) as any[])
+    : (conn.prepare(sql).all(since) as any[]);
+  const grid: Record<string, { sum: number; count: number }> = {};
+  for (const r of rows) {
+    const d = new Date(r.bucket_ts);
+    const key = `${d.getDay()}|${d.getHours()}`;
+    const e = grid[key] ?? { sum: 0, count: 0 };
+    e.sum += Number(r.bytes_down ?? 0) + Number(r.bytes_up ?? 0);
+    e.count += 1;
+    grid[key] = e;
+  }
+  const out: { dow: number; hour: number; bytes: number }[] = [];
+  for (let dow = 0; dow < 7; dow++) {
+    for (let hour = 0; hour < 24; hour++) {
+      const e = grid[`${dow}|${hour}`];
+      out.push({ dow, hour, bytes: e ? Math.round(e.sum / e.count) : 0 });
+    }
+  }
+  return out;
+}
+
+/** Concurrent online device count over time. */
+export function getConcurrentDevices(minutes = 60 * 24): { ts: number; count: number }[] {
+  const conn = db();
+  const since = Date.now() - minutes * MIN;
+  const rows = conn.prepare(`
+    SELECT ts, SUM(online) AS count FROM samples_raw WHERE ts >= ? GROUP BY ts ORDER BY ts
+  `).all(since) as { ts: number; count: number }[];
+  return rows.map((r) => ({ ts: r.ts, count: Number(r.count ?? 0) }));
+}
+
+/** Top-N talkers in a window. */
+export function getTopTalkers(range: 'hour' | 'today' | 'week' | 'month' = 'today', limit = 10) {
+  const conn = db();
+  const now = Date.now();
+  let since: number;
+  switch (range) {
+    case 'hour': since = now - HOUR; break;
+    case 'today': { const d = new Date(); d.setHours(0,0,0,0); since = d.getTime(); break; }
+    case 'week': since = now - 7 * DAY; break;
+    case 'month': since = now - 30 * DAY; break;
+  }
+  return conn.prepare(`
+    SELECT d.mac, COALESCE(d.custom_label, d.router_remark, d.hostname, d.mac) AS label,
+           d.category, d.vendor,
+           SUM(t.bd) AS bytes_down, SUM(t.bu) AS bytes_up
+    FROM (
+      SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
+      UNION ALL
+      SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ?
+      UNION ALL
+      SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ?
+    ) t
+    JOIN devices d ON d.mac = t.mac
+    GROUP BY d.mac
+    ORDER BY (SUM(t.bd) + SUM(t.bu)) DESC
+    LIMIT ?
+  `).all(since, since, since, limit);
+}
+
+/** Anomaly detection: today's hourly bytes per device vs trailing 14-day average for that hour. */
+export function getAnomalies(threshold = 3): Array<{ mac: string; label: string; hour_ts: number; bytes: number; baseline: number; z: number }> {
+  const conn = db();
+  const today = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  const baselineSince = today - 14 * DAY;
+  const rows = conn.prepare(`
+    SELECT t.mac, t.bucket_ts AS hour_ts, t.bytes_down + t.bytes_up AS bytes,
+           COALESCE(d.custom_label, d.router_remark, d.hostname, t.mac) AS label
+    FROM traffic_hour t
+    JOIN devices d ON d.mac = t.mac
+    WHERE t.bucket_ts >= ?
+    ORDER BY t.bucket_ts
+  `).all(today) as any[];
+  const baseline = conn.prepare(`
+    SELECT mac, AVG(bytes_down + bytes_up) AS mean,
+           CASE WHEN COUNT(*) > 1
+                THEN SQRT(AVG((bytes_down + bytes_up) * (bytes_down + bytes_up)) - AVG(bytes_down + bytes_up) * AVG(bytes_down + bytes_up))
+                ELSE 0 END AS stddev
+    FROM traffic_hour WHERE bucket_ts >= ? AND bucket_ts < ?
+    GROUP BY mac
+  `).all(baselineSince, today) as any[];
+  const baselineMap = new Map<string, { mean: number; stddev: number }>();
+  for (const b of baseline) baselineMap.set(b.mac, { mean: Number(b.mean ?? 0), stddev: Number(b.stddev ?? 0) });
+  const out: any[] = [];
+  for (const r of rows) {
+    const b = baselineMap.get(r.mac);
+    if (!b || b.stddev <= 0) continue;
+    const z = (Number(r.bytes) - b.mean) / b.stddev;
+    if (z >= threshold) {
+      out.push({ mac: r.mac, label: r.label, hour_ts: r.hour_ts, bytes: Number(r.bytes), baseline: Math.round(b.mean), z: Number(z.toFixed(2)) });
+    }
+  }
+  return out.sort((a, b) => b.z - a.z).slice(0, 20);
+}
+
+export function getDeviceSessions(mac: string, limit = 50) {
+  const conn = db();
+  return conn.prepare(`
+    SELECT started_at, ended_at, bytes_down, bytes_up FROM device_sessions
+    WHERE mac = ? ORDER BY started_at DESC LIMIT ?
+  `).all(mac, limit);
+}
+
+/** Returns categorical breakdown (by hostName→category mapping in devices). */
+export function getCategoryBreakdown(range: 'today' | 'week' | 'month' = 'today') {
+  const conn = db();
+  const now = Date.now();
+  let since: number;
+  switch (range) {
+    case 'today': { const d = new Date(); d.setHours(0,0,0,0); since = d.getTime(); break; }
+    case 'week': since = now - 7 * DAY; break;
+    case 'month': since = now - 30 * DAY; break;
+  }
+  return conn.prepare(`
+    SELECT COALESCE(d.category, 'unknown') AS category,
+           SUM(t.bd) AS bytes_down, SUM(t.bu) AS bytes_up,
+           COUNT(DISTINCT d.mac) AS device_count
+    FROM (
+      SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
+      UNION ALL
+      SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ?
+      UNION ALL
+      SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ?
+    ) t
+    JOIN devices d ON d.mac = t.mac
+    GROUP BY COALESCE(d.category, 'unknown')
+    ORDER BY (SUM(t.bd) + SUM(t.bu)) DESC
+  `).all(since, since, since);
+}
+
+export function getRouterUptimeSeries(days = 30) {
+  const conn = db();
+  const since = Date.now() - days * DAY;
+  return conn.prepare(`
+    SELECT ts, uptime_sec, is_reboot, online_count FROM router_state
+    WHERE ts >= ? ORDER BY ts
+  `).all(since);
 }
 
 export function getDeviceStats(mac: string) {

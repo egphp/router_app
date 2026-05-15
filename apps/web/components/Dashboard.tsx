@@ -5,8 +5,12 @@ import { StatCard } from './StatCard';
 import { LiveSpeedChart } from './LiveSpeedChart';
 import { DeviceTable } from './DeviceTable';
 import { AlertBanner } from './AlertBanner';
+import { TopTalkers } from './TopTalkers';
+import { CategoryBreakdown } from './CategoryBreakdown';
+import { ConcurrentChart } from './ConcurrentChart';
+import { AnomaliesCard } from './AnomaliesCard';
 import { formatBytes, formatDuration } from '../lib/format';
-import { Activity, Download, Users, Bell, Crown } from 'lucide-react';
+import { Activity, Download, Bell, Crown } from 'lucide-react';
 
 interface Status {
   connected: boolean;
@@ -56,6 +60,17 @@ export function Dashboard() {
       </div>
 
       <LiveSpeedChart />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <TopTalkers />
+        <CategoryBreakdown />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <ConcurrentChart />
+        <AnomaliesCard />
+      </div>
+
       <DeviceTable />
     </div>
   );

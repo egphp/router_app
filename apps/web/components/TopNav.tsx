@@ -2,13 +2,15 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Bell, Activity, AlertTriangle, Cog, LayoutDashboard, ListTree } from 'lucide-react';
+import { Bell, Activity, AlertTriangle, Cog, LayoutDashboard, ListTree, BarChart3, Shield } from 'lucide-react';
 import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
 
 const nav = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/devices', label: 'Devices', icon: ListTree },
+  { href: '/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/security', label: 'Security', icon: Shield },
   { href: '/alerts', label: 'Alerts', icon: Bell },
   { href: '/outages', label: 'Outages', icon: AlertTriangle },
   { href: '/settings', label: 'Settings', icon: Cog },
