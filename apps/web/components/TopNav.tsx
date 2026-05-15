@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
-  Bell, Activity, AlertTriangle, Cog, LayoutDashboard, ListTree, BarChart3, Shield,
+  Bell, AlertTriangle, Cog, LayoutDashboard, ListTree, BarChart3, Shield,
   Receipt, Calendar, ShieldAlert, Network, Download, Menu, X,
 } from 'lucide-react';
 import useSWR from 'swr';
@@ -61,12 +61,16 @@ export function TopNav() {
             <Menu size={20} />
           </button>
 
-          {/* Logo — display font + colored dot */}
+          {/* Logo — Aurora monogram + display wordmark */}
           <Link href="/" className="flex items-center gap-2.5 shrink-0 group">
-            <span className="relative flex items-center justify-center w-7 h-7 rounded-xl"
-              style={{ background: 'linear-gradient(135deg, var(--peach), var(--sun))', boxShadow: '0 4px 12px -3px oklch(0.82 0.13 50 / 0.5)' }}>
-              <Activity size={14} strokeWidth={2.5} className="text-[#13162a]" />
-            </span>
+            <img
+              src="/icon-64.png"
+              alt="Tenda Monitor"
+              width={32}
+              height={32}
+              className="rounded-lg shrink-0"
+              style={{ boxShadow: '0 4px 14px -4px oklch(0.82 0.13 50 / 0.4)' }}
+            />
             <span className="font-display text-base sm:text-lg font-semibold tracking-tight whitespace-nowrap">
               <span className="text-text-primary">Tenda</span>
               <span className="text-accent-peach italic"> Monitor</span>
@@ -138,10 +142,13 @@ export function TopNav() {
             style={{ background: 'var(--bg-card)', borderRight: '1.5px solid var(--border)' }}>
             <div className="flex items-center justify-between px-4 h-14 shrink-0" style={{ borderBottom: '1.5px solid var(--border)' }}>
               <div className="flex items-center gap-2.5">
-                <span className="flex items-center justify-center w-7 h-7 rounded-xl"
-                  style={{ background: 'linear-gradient(135deg, var(--peach), var(--sun))' }}>
-                  <Activity size={14} strokeWidth={2.5} className="text-[#13162a]" />
-                </span>
+                <img
+                  src="/icon-64.png"
+                  alt="Tenda Monitor"
+                  width={28}
+                  height={28}
+                  className="rounded-lg"
+                />
                 <span className="font-display text-base font-semibold">
                   <span className="text-text-primary">Tenda</span>
                   <span className="text-accent-peach italic"> Monitor</span>
