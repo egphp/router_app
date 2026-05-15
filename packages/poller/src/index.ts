@@ -30,7 +30,7 @@ async function main() {
   const sampler = new Sampler(db, router, ipc, cfg.pollIntervalMs);
 
   const controlPort = Number(process.env.CONTROL_PORT ?? 3031);
-  const controlServer = startControlServer(controlPort, router, resolveRepoRoot());
+  const controlServer = startControlServer(controlPort, router, resolveRepoRoot(), sampler);
 
   const syslogPort = Number(process.env.SYSLOG_PORT ?? 514);
   const syslog = new SyslogServer(db, syslogPort);

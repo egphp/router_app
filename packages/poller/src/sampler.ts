@@ -9,6 +9,12 @@ import { SystemLogPuller } from './system-log-puller.js';
 import { parseRouterUptime, MIN } from '@tenda/shared';
 import { log } from './logger.js';
 
+export interface RouterTelemetry {
+  ts: number;
+  sysInfo: { cpuUsage?: number; memUsage?: number; firmware?: string; model?: string; raw: Record<string, unknown> };
+  wanFlow: Array<Record<string, unknown>>;
+}
+
 export class Sampler {
   private timer: NodeJS.Timeout | null = null;
   private rollupTimer: NodeJS.Timeout | null = null;
@@ -19,6 +25,7 @@ export class Sampler {
   private rollup: RollupWorker;
   private security: SecurityScanner;
   private logPuller: SystemLogPuller;
+  private telemetry: RouterTelemetry | null = null;
 
   private insertRouterState: Database.Statement;
 
@@ -64,6 +71,10 @@ export class Sampler {
     return this.timer !== null;
   }
 
+  getTelemetry(): RouterTelemetry | null {
+    return this.telemetry;
+  }
+
   private async runCycle(): Promise<void> {
     const cycleStart = Date.now();
     try {
@@ -92,6 +103,18 @@ export class Sampler {
       this.ipc.broadcast({ type: 'samples-updated', ts: now, deviceCount: result.deviceCount });
       if (result.newDevices.length > 0) {
         log.info('new devices detected', { macs: result.newDevices });
+      }
+
+      // Extended telemetry: pull CPU/RAM + WAN flow opportunistically (every cycle).
+      // Errors are swallowed inside the methods; cache is best-effort.
+      try {
+        const [sysInfo, wanFlow] = await Promise.all([
+          this.router.getSysInfo(),
+          this.router.getWanFlow(),
+        ]);
+        this.telemetry = { ts: now, sysInfo, wanFlow };
+      } catch {
+        // keep previous telemetry
       }
 
       const elapsed = Date.now() - cycleStart;

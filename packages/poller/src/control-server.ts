@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RouterClient } from './router-client.js';
+import type { Sampler } from './sampler.js';
 import { log } from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,7 +13,7 @@ const __dirname = path.dirname(__filename);
  * Local-only HTTP control plane. The Next.js web app talks to this when the user changes
  * router host/password from /settings, runs a reboot test, etc. Binds to 127.0.0.1 only.
  */
-export function startControlServer(port: number, router: RouterClient, repoRoot: string): http.Server {
+export function startControlServer(port: number, router: RouterClient, repoRoot: string, sampler?: Sampler): http.Server {
   const envPath = path.resolve(repoRoot, '.env');
 
   const server = http.createServer(async (req, res) => {
@@ -26,6 +27,11 @@ export function startControlServer(port: number, router: RouterClient, repoRoot:
     try {
       if (req.url === '/health') {
         res.end(JSON.stringify({ ok: true, host: router.getHost() }));
+        return;
+      }
+      if (req.url === '/telemetry' && req.method === 'GET') {
+        const t = sampler?.getTelemetry() ?? null;
+        res.end(JSON.stringify({ ok: true, telemetry: t }));
         return;
       }
       if (req.url === '/test-credentials' && req.method === 'POST') {

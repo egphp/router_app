@@ -183,6 +183,58 @@ export class RouterClient {
   }
 
   /**
+   * Get extended system info: CPU percent, memory percent, firmware version, model.
+   * Field names vary by firmware; we return what we can parse.
+   */
+  async getSysInfo(): Promise<{
+    cpuUsage?: number;
+    memUsage?: number;
+    firmware?: string;
+    model?: string;
+    raw: Record<string, unknown>;
+  }> {
+    try {
+      const r = await this.call<{ getSysInfo: Record<string, unknown> }>(['getSysInfo'], { getSysInfo: '' });
+      const x = r.getSysInfo ?? {};
+      const num = (v: unknown): number | undefined => {
+        if (typeof v === 'number' && Number.isFinite(v)) return v;
+        if (typeof v === 'string') {
+          const n = parseFloat(v.replace('%', ''));
+          return Number.isFinite(n) ? n : undefined;
+        }
+        return undefined;
+      };
+      return {
+        cpuUsage: num((x as any).cpuUsed ?? (x as any).cpu ?? (x as any).cpuUsage),
+        memUsage: num((x as any).memUsed ?? (x as any).mem ?? (x as any).memUsage ?? (x as any).memoryUsage),
+        firmware: (x as any).softVer ?? (x as any).firmware ?? (x as any).fwVersion,
+        model: (x as any).productName ?? (x as any).model,
+        raw: x,
+      };
+    } catch (e) {
+      log.warn('router.getSysInfo failed', String(e));
+      return { raw: {} };
+    }
+  }
+
+  /**
+   * Per-WAN flow counters (dual-WAN routers expose 2 entries).
+   * Returns an array; each entry has up/down byte counters and speeds when available.
+   */
+  async getWanFlow(): Promise<Array<Record<string, unknown>>> {
+    try {
+      const r = await this.call<{ getWanFlow: unknown }>(['getWanFlow'], { getWanFlow: '' });
+      const flow = r.getWanFlow;
+      if (Array.isArray(flow)) return flow;
+      if (flow && typeof flow === 'object') return [flow as Record<string, unknown>];
+      return [];
+    } catch (e) {
+      log.warn('router.getWanFlow failed', String(e));
+      return [];
+    }
+  }
+
+  /**
    * Reads the router's system log. sysLogType:
    *   0 = all, 1 = system events (login/sync), 2 = attack log (ARP/DDoS), 3 = quits
    */

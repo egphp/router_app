@@ -10,6 +10,7 @@ import { TopTalkers } from './TopTalkers';
 import { CategoryBreakdown } from './CategoryBreakdown';
 import { ConcurrentChart } from './ConcurrentChart';
 import { AnomaliesCard } from './AnomaliesCard';
+import { TelemetryCard } from './TelemetryCard';
 import { formatBytes, formatDuration } from '../lib/format';
 import { Activity, Download, Bell, Crown } from 'lucide-react';
 
@@ -64,14 +65,16 @@ export function Dashboard() {
       <LiveSpeedChart />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+        <TelemetryCard />
         <TopTalkers />
-        <CategoryBreakdown />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+        <CategoryBreakdown />
         <ConcurrentChart />
-        <AnomaliesCard />
       </div>
+
+      <AnomaliesCard />
 
       <DeviceTable />
     </div>
