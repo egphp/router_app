@@ -22,10 +22,6 @@ function resolveRepoRoot(): string {
 
 async function main() {
   const cfg = loadConfig();
-  if (!cfg.routerPassword) {
-    log.error('ROUTER_PASSWORD not set; refusing to start');
-    process.exit(1);
-  }
   runMigrations();
   const db = getDb();
 
@@ -43,8 +39,22 @@ async function main() {
   const tg = new TelegramNotifier(db);
   const tgTimer = setInterval(() => { tg.tick().catch((e) => log.warn('tg.tick error', String(e))); }, 60_000);
 
-  log.info('poller starting', { host: cfg.routerHost, intervalMs: cfg.pollIntervalMs, db: cfg.dbPath, controlPort, syslogPort });
-  sampler.start();
+  if (!cfg.routerPassword) {
+    log.warn('ROUTER_PASSWORD not set — control server ready for onboarding, sampler idle until credentials saved');
+  } else {
+    log.info('poller starting', { host: cfg.routerHost, intervalMs: cfg.pollIntervalMs, db: cfg.dbPath, controlPort, syslogPort });
+    sampler.start();
+  }
+
+  // Watch for credentials becoming available via control-server -> .env update
+  // RouterClient.setCredentials updates host/password live; we just need to (re)start the sampler.
+  const credentialWatcher = setInterval(() => {
+    const havePwd = (process.env.ROUTER_PASSWORD ?? '').trim().length > 0;
+    if (havePwd && !sampler.isRunning()) {
+      log.info('credentials available — starting sampler');
+      sampler.start();
+    }
+  }, 3000);
 
   const shutdown = (sig: string) => {
     log.info('shutting down', { sig });
@@ -53,6 +63,7 @@ async function main() {
     controlServer.close();
     syslog.stop();
     clearInterval(tgTimer);
+    clearInterval(credentialWatcher);
     process.exit(0);
   };
   process.on('SIGINT', () => shutdown('SIGINT'));

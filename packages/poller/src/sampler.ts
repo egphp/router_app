@@ -55,9 +55,13 @@ export class Sampler {
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    if (this.rollupTimer) clearInterval(this.rollupTimer);
-    if (this.logPullTimer) clearInterval(this.logPullTimer);
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.rollupTimer) { clearInterval(this.rollupTimer); this.rollupTimer = null; }
+    if (this.logPullTimer) { clearInterval(this.logPullTimer); this.logPullTimer = null; }
+  }
+
+  isRunning(): boolean {
+    return this.timer !== null;
   }
 
   private async runCycle(): Promise<void> {
