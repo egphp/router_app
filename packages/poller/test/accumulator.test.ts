@@ -26,12 +26,15 @@ function makeDb(): Database.Database {
   return db;
 }
 
-function device(mac: string, opts: { up?: number; down?: number; sumKb: number; online?: 0 | 1; name?: string } = { sumKb: 0 }) {
+function device(
+  mac: string,
+  opts: { up?: number; down?: number; sumKb: number; online?: 0 | 1; name?: string; onlineTime?: number } = { sumKb: 0 },
+) {
   return {
     ID: 1, hostIP: '192.168.0.10', hostMAC: mac, hostName: opts.name ?? '', hostRemark: '',
     hostUploadSpeed: opts.up ?? 0, hostDownloadSpeed: opts.down ?? 0,
     hostConnectCount: 0, hostDownloadSum: opts.sumKb, hostConnectType: 4,
-    hostUploadLimit: 0, hostDownloadLimit: 0, onlineTime: 0,
+    hostUploadLimit: 0, hostDownloadLimit: 0, onlineTime: opts.onlineTime ?? 0,
     hostAuthType: '', authUserName: '', hostOnlineStatus: (opts.online ?? 1) as any,
   };
 }
@@ -61,14 +64,19 @@ test('reboot detected → counter starts fresh, full sum counted', () => {
   assert.equal(r.totalBytesDownDelta, 500 * 1024, 'after reboot we add full new sum');
 });
 
-test('counter regression to a real, large new value is treated as a real reset', () => {
+test('counter regression without a session restart is treated as firmware noise', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
-  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 50_000 })], false);
-  // prev=50_000 KB, curr=200 KB (much smaller). curr ≥ 64 → treated as a real session reset.
-  // Credit just the new bytes; we accept the loss of bytes between prev and the reset rather
-  // than risk crediting them twice via firmware flicker.
-  const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 200 })], false);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 50_000, onlineTime: 100 })], false);
+  const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 200, onlineTime: 101 })], false);
+  assert.equal(r.totalBytesDownDelta, 0);
+});
+
+test('counter regression with a lower onlineTime is treated as a new device session', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 50_000, onlineTime: 100 })], false);
+  const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 200, onlineTime: 1 })], false);
   assert.equal(r.totalBytesDownDelta, 200 * 1024);
 });
 
@@ -101,6 +109,22 @@ test('upload integration: bytes ≈ avg(prev_speed, now_speed) × dt, with KB/s 
   assert.equal(r.totalBytesUpDelta, 2 * 1024 * 30);
 });
 
+test('5-minute speed averages include every sample once', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { down: 1, up: 1, sumKb: 0 })], false);
+  acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { down: 3, up: 5, sumKb: 1 })], false);
+  acc.process(1_060_000, [device('AA:BB:CC:00:00:01', { down: 5, up: 7, sumKb: 2 })], false);
+
+  const row = db.prepare(`
+    SELECT sample_count, avg_down_bps, avg_up_bps
+    FROM traffic_5min WHERE mac = 'AA:BB:CC:00:00:01'
+  `).get() as { sample_count: number; avg_down_bps: number; avg_up_bps: number };
+  assert.equal(row.sample_count, 3);
+  assert.equal(row.avg_down_bps, 3 * 1024);
+  assert.equal(row.avg_up_bps, Math.round((1 + 5 + 7) * 1024 / 3));
+});
+
 test('new MAC inserts new_device alert', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
@@ -118,6 +142,19 @@ test('offline device contributes 0 upload (no integration when offline)', () => 
   // a transitional half-trapezoid spike that overstates traffic during disconnect events.
   const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { up: 0, sumKb: 0, online: 0 })], false);
   assert.equal(r.totalBytesUpDelta, 0);
+});
+
+test('long gaps re-baseline without synthesizing active seconds', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 100, online: 1 })], false);
+  acc.process(1_000_000 + 10 * 60_000, [device('AA:BB:CC:00:00:01', { sumKb: 200, online: 1 })], false);
+  const total = db.prepare(`
+    SELECT COALESCE(SUM(active_sec), 0) AS active_sec, COALESCE(SUM(bytes_down), 0) AS bytes_down
+    FROM traffic_5min WHERE mac = 'AA:BB:CC:00:00:01'
+  `).get() as { active_sec: number; bytes_down: number };
+  assert.equal(total.active_sec, 0);
+  assert.equal(total.bytes_down, 0);
 });
 
 test('multiple devices accumulated independently', () => {
@@ -166,4 +203,22 @@ test('per-session zero (no reboot): flicker absorbed, no double-counting', () =>
   // Expected: 0 (first) + 163K (real delta) + 0 (flicker absorbed) + 0 (still under flicker threshold)
   const expected = (0 + 163 + 0 + 0) * 1024;
   assert.equal(total, expected, `expected ${expected} bytes, got ${total}`);
+});
+
+test('low post-zero flicker preserves high-water mark until the true counter returns', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [device('AA:00:00:00:00:01', { sumKb: 100 })], false);
+  acc.process(1_030_000, [device('AA:00:00:00:00:01', { sumKb: 263 })], false);
+  acc.process(1_060_000, [device('AA:00:00:00:00:01', { sumKb: 0 })], false);
+  acc.process(1_090_000, [device('AA:00:00:00:00:01', { sumKb: 50 })], false);
+  const r = acc.process(1_120_000, [device('AA:00:00:00:00:01', { sumKb: 263 })], false);
+
+  assert.equal(r.totalBytesDownDelta, 0, 'returning to the prior high-water mark is not new traffic');
+  const latest = db.prepare(`
+    SELECT down_sum_kb FROM samples_raw
+    WHERE mac = 'AA:00:00:00:00:01'
+    ORDER BY ts DESC LIMIT 1
+  `).get() as { down_sum_kb: number };
+  assert.equal(latest.down_sum_kb, 263, 'stored sample keeps the high-water counter');
 });

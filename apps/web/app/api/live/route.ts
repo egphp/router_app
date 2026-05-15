@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getRecentSpeeds } from '../../../lib/queries';
+import { getRecentSpeedSeries } from '../../../lib/queries';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const minutes = Number(url.searchParams.get('minutes') ?? '60');
-  return NextResponse.json({ speeds: getRecentSpeeds(minutes) });
+  return NextResponse.json(getRecentSpeedSeries(minutes));
 }

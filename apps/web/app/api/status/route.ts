@@ -18,6 +18,8 @@ export async function GET() {
     bytes_today_up: snap.bytes_today_up,
     wan_today_down: snap.wan_today_down,
     wan_today_up: snap.wan_today_up,
+    wan_first_sample_ts: snap.wan_first_sample_ts,
+    wan_today_complete: snap.wan_today_complete,
     top_device: snap.top_device,
     top_device_2: snap.top_device_2,
   });

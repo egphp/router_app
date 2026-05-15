@@ -11,7 +11,8 @@
     "build:web": "pnpm --filter @tenda/web build",
     "start:poller": "pnpm --filter @tenda/poller start",
     "start:web": "pnpm --filter @tenda/web start",
-    "migrate": "pnpm --filter @tenda/shared migrate"
+    "migrate": "pnpm --filter @tenda/shared migrate",
+    "repair:traffic": "pnpm --filter @tenda/poller repair:traffic"
   },
   "engines": {
     "node": ">=22"

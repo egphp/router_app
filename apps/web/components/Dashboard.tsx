@@ -27,6 +27,8 @@ interface Status {
   bytes_today_up: number;
   wan_today_down: number;
   wan_today_up: number;
+  wan_first_sample_ts: number | null;
+  wan_today_complete: boolean;
   top_device: TopDevice | null;
   top_device_2: TopDevice | null;
   alerts: number;
@@ -139,6 +141,12 @@ export function Dashboard() {
     }
   };
 
+  const todayDown = status?.bytes_today_down ?? 0;
+  const todayUp = status?.bytes_today_up ?? 0;
+  const wanSince = status?.wan_first_sample_ts
+    ? new Date(status.wan_first_sample_ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null;
+
   return (
     <div className="space-y-4 sm:space-y-5">
       <UpdateBanner />
@@ -157,12 +165,12 @@ export function Dashboard() {
             tone={status?.connected ? 'mint' : 'coral'}
           />
           <StatCard
-            label="Today (WAN total)"
-            value={formatBytes((status?.wan_today_down ?? 0) + (status?.wan_today_up ?? 0))}
-            hint={`↓ ${formatBytes(status?.wan_today_down ?? 0)} · ↑ ${formatBytes(status?.wan_today_up ?? 0)}`}
+            label="Today (device estimate)"
+            value={formatBytes(todayDown + todayUp)}
+            hint={`↓ ${formatBytes(todayDown)} · ↑ ${formatBytes(todayUp)}`}
             icon={<Download size={16} strokeWidth={2.2} />}
             tone="peach"
-            title={`Per-device estimate: ↓ ${formatBytes(status?.bytes_today_down ?? 0)} · ↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
+            title={`WAN observed${wanSince ? ` since ${wanSince}` : ''}: ↓ ${formatBytes(status?.wan_today_down ?? 0)} · ↑ ${formatBytes(status?.wan_today_up ?? 0)}`}
           />
           <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
         </div>

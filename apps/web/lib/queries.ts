@@ -29,9 +29,11 @@ export interface RouterSnapshot {
   last_sample_ts: number | null;
   bytes_today_down: number;
   bytes_today_up: number;
-  /** WAN-level ground truth — authoritative total down/up bytes today (integrated from router's wanFlux). */
+  /** WAN flux observed from the router. Some Tenda firmware under-reports this, so it is diagnostic only. */
   wan_today_down: number;
   wan_today_up: number;
+  wan_first_sample_ts: number | null;
+  wan_today_complete: boolean;
   top_device: { mac: string; label: string; bytes_down: number; bytes_up: number } | null;
   top_device_2: { mac: string; label: string; bytes_down: number; bytes_up: number } | null;
   alerts_undismissed: number;
@@ -129,8 +131,16 @@ export function getRouterSnapshot(): RouterSnapshot {
   // WAN-level cumulative today (ground truth, independent of per-device estimates).
   const wanRow = conn.prepare(`
     SELECT COALESCE(SUM(bytes_down), 0) AS bd, COALESCE(SUM(bytes_up), 0) AS bu
-    FROM wan_traffic_5min WHERE bucket_ts >= ?
+    FROM wan_traffic_day WHERE bucket_ts >= ?
   `).get(startOfDay) as { bd: number; bu: number } | undefined;
+  const wanCoverage = conn.prepare(`
+    SELECT MIN(ts) AS first_ts, MAX(ts) AS last_ts, COUNT(*) AS sample_count
+    FROM wan_samples WHERE ts >= ?
+  `).get(startOfDay) as { first_ts: number | null; last_ts: number | null; sample_count: number };
+  const wanTodayComplete = Boolean(
+    Number(wanCoverage.sample_count ?? 0) > 0 &&
+    Number(wanCoverage.first_ts ?? Number.POSITIVE_INFINITY) <= startOfDay + 2 * MIN
+  );
 
   return {
     uptime_sec: latest?.uptime_sec ?? 0,
@@ -141,6 +151,8 @@ export function getRouterSnapshot(): RouterSnapshot {
     bytes_today_up: Number(todayTotals.bytes_up ?? 0),
     wan_today_down: Number(wanRow?.bd ?? 0),
     wan_today_up: Number(wanRow?.bu ?? 0),
+    wan_first_sample_ts: wanCoverage.first_ts ?? null,
+    wan_today_complete: wanTodayComplete,
     top_device: topDevice,
     top_device_2: topDevice2,
     alerts_undismissed: counts.alerts,
@@ -149,17 +161,111 @@ export function getRouterSnapshot(): RouterSnapshot {
 
 export interface LiveSpeedPoint { ts: number; down_bps: number; up_bps: number }
 
-export function getRecentSpeeds(minutes = 60): LiveSpeedPoint[] {
-  const conn = db();
-  const since = Date.now() - minutes * MIN;
-  const rows = conn.prepare(`
+export interface LiveSpeedSeries {
+  speeds: LiveSpeedPoint[];
+  source: 'router-best' | 'wan' | 'devices';
+  latest_ts: number | null;
+}
+
+function getDeviceRecentSpeeds(conn: ReturnType<typeof db>, since: number): LiveSpeedPoint[] {
+  return conn.prepare(`
     SELECT ts, SUM(down_speed_bps) AS down_bps, SUM(up_speed_bps) AS up_bps
     FROM samples_raw
     WHERE ts >= ?
     GROUP BY ts
     ORDER BY ts ASC
   `).all(since) as LiveSpeedPoint[];
-  return rows;
+}
+
+function getDeviceCounterRecentSpeeds(conn: ReturnType<typeof db>, since: number): LiveSpeedPoint[] {
+  return conn.prepare(`
+    WITH recent AS (
+      SELECT
+        mac,
+        ts,
+        down_sum_kb,
+        up_speed_bps,
+        LAG(ts) OVER (PARTITION BY mac ORDER BY ts) AS prev_ts,
+        LAG(down_sum_kb) OVER (PARTITION BY mac ORDER BY ts) AS prev_down_sum_kb
+      FROM samples_raw
+      WHERE ts >= ?
+    )
+    SELECT
+      ts,
+      SUM(
+        CASE
+          WHEN prev_ts IS NULL THEN 0
+          WHEN ts < ? THEN 0
+          WHEN ts <= prev_ts THEN 0
+          WHEN ts - prev_ts > ? THEN 0
+          WHEN down_sum_kb < prev_down_sum_kb THEN 0
+          ELSE ((down_sum_kb - prev_down_sum_kb) * 1024.0 * 1000.0) / (ts - prev_ts)
+        END
+      ) AS down_bps,
+      SUM(up_speed_bps) AS up_bps
+    FROM recent
+    WHERE ts >= ?
+    GROUP BY ts
+    ORDER BY ts ASC
+  `).all(since - 5 * MIN, since, 5 * MIN, since) as LiveSpeedPoint[];
+}
+
+function chooseBestSpeedSeries(
+  wanRows: LiveSpeedPoint[],
+  deviceRows: LiveSpeedPoint[],
+  counterRows: LiveSpeedPoint[],
+): LiveSpeedPoint[] {
+  const byTs = new Map<number, LiveSpeedPoint>();
+  const merge = (rows: LiveSpeedPoint[]) => {
+    for (const row of rows) {
+      const current = byTs.get(row.ts) ?? { ts: row.ts, down_bps: 0, up_bps: 0 };
+      current.down_bps = Math.max(Number(current.down_bps ?? 0), Number(row.down_bps ?? 0));
+      current.up_bps = Math.max(Number(current.up_bps ?? 0), Number(row.up_bps ?? 0));
+      byTs.set(row.ts, current);
+    }
+  };
+  merge(wanRows);
+  merge(deviceRows);
+  merge(counterRows);
+  return [...byTs.values()].sort((a, b) => a.ts - b.ts);
+}
+
+export function getRecentSpeedSeries(minutes = 60): LiveSpeedSeries {
+  const conn = db();
+  const since = Date.now() - minutes * MIN;
+  const wanRows = conn.prepare(`
+    SELECT ts, SUM(down_bytes_per_s) AS down_bps, SUM(up_bytes_per_s) AS up_bps
+    FROM wan_samples
+    WHERE ts >= ?
+    GROUP BY ts
+    ORDER BY ts ASC
+  `).all(since) as LiveSpeedPoint[];
+  const deviceRows = getDeviceRecentSpeeds(conn, since);
+  const counterRows = getDeviceCounterRecentSpeeds(conn, since);
+  const bestRows = chooseBestSpeedSeries(wanRows, deviceRows, counterRows);
+
+  if (bestRows.length > 0) {
+    return {
+      speeds: bestRows,
+      source: 'router-best',
+      latest_ts: bestRows[bestRows.length - 1]?.ts ?? null,
+    };
+  }
+
+  return {
+    speeds: deviceRows,
+    source: 'devices',
+    latest_ts: deviceRows[deviceRows.length - 1]?.ts ?? null,
+  };
+}
+
+export function getRecentSpeeds(minutes = 60): LiveSpeedPoint[] {
+  return getRecentSpeedSeries(minutes).speeds;
+}
+
+export function getRecentDeviceSpeeds(minutes = 60): LiveSpeedPoint[] {
+  const conn = db();
+  return getDeviceRecentSpeeds(conn, Date.now() - minutes * MIN);
 }
 
 export type Bucket = 'hour' | 'today' | 'week' | 'month' | 'year' | 'all';
@@ -171,78 +277,69 @@ export function getDeviceTraffic(mac: string, range: Bucket): BucketPoint[] {
   const now = Date.now();
   switch (range) {
     case 'hour': {
-      // last 60 min of 5-min buckets
       const since = now - HOUR;
-      return conn.prepare(`
+      const startOfHour = (() => { const d = new Date(now); d.setMinutes(0, 0, 0); return d.getTime(); })();
+      const rows = conn.prepare(`
         SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
         FROM traffic_5min WHERE mac = ? AND bucket_ts >= ?
+        UNION ALL
+        SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
+        FROM traffic_hour WHERE mac = ? AND bucket_ts >= ? AND bucket_ts < ?
         ORDER BY bucket_ts ASC
-      `).all(mac, since) as BucketPoint[];
+      `).all(mac, since, mac, bucketHour(since), startOfHour) as BucketPoint[];
+      return rows;
     }
     case 'today': {
       const d = new Date(); d.setHours(0, 0, 0, 0);
       const since = d.getTime();
-      // combine recent 5-min + hour (5-min for the current hour, hour for completed hours)
-      return conn.prepare(`
-        SELECT bucket_ts, SUM(bytes_down) AS bytes_down, SUM(bytes_up) AS bytes_up,
-               MAX(peak_down_bps) AS peak_down_bps, MAX(peak_up_bps) AS peak_up_bps
-        FROM (
-          SELECT ${makeBucketExpr('bucket_ts', HOUR)} AS bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-          FROM traffic_5min WHERE mac = ? AND bucket_ts >= ?
-          UNION ALL
-          SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-          FROM traffic_hour WHERE mac = ? AND bucket_ts >= ?
-        ) GROUP BY bucket_ts ORDER BY bucket_ts ASC
-      `).all(mac, since, mac, since) as BucketPoint[];
+      const frag = trafficRowsSinceSql(since, mac);
+      const rows = conn.prepare(frag.sql).all(...frag.params) as BucketPoint[];
+      return aggregateRows(rows, (ts) => bucketHour(ts));
     }
     case 'week': {
       const since = now - 7 * DAY;
-      return conn.prepare(`
-        SELECT bucket_ts, SUM(bytes_down) AS bytes_down, SUM(bytes_up) AS bytes_up,
-               MAX(peak_down_bps) AS peak_down_bps, MAX(peak_up_bps) AS peak_up_bps
-        FROM (
-          SELECT ${makeBucketExpr('bucket_ts', DAY)} AS bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-          FROM traffic_hour WHERE mac = ? AND bucket_ts >= ?
-          UNION ALL
-          SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-          FROM traffic_day WHERE mac = ? AND bucket_ts >= ?
-        ) GROUP BY bucket_ts ORDER BY bucket_ts ASC
-      `).all(mac, since, mac, since) as BucketPoint[];
+      const frag = trafficRowsSinceSql(since, mac);
+      const rows = conn.prepare(frag.sql).all(...frag.params) as BucketPoint[];
+      return aggregateRows(rows, bucketLocalDay);
     }
     case 'month': {
       const since = now - 30 * DAY;
-      return conn.prepare(`
-        SELECT bucket_ts, SUM(bytes_down) AS bytes_down, SUM(bytes_up) AS bytes_up,
-               MAX(peak_down_bps) AS peak_down_bps, MAX(peak_up_bps) AS peak_up_bps
-        FROM (
-          SELECT ${makeBucketExpr('bucket_ts', DAY)} AS bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-          FROM traffic_hour WHERE mac = ? AND bucket_ts >= ?
-          UNION ALL
-          SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-          FROM traffic_day WHERE mac = ? AND bucket_ts >= ?
-        ) GROUP BY bucket_ts ORDER BY bucket_ts ASC
-      `).all(mac, since, mac, since) as BucketPoint[];
+      const frag = trafficRowsSinceSql(since, mac);
+      const rows = conn.prepare(frag.sql).all(...frag.params) as BucketPoint[];
+      return aggregateRows(rows, bucketLocalDay);
     }
     case 'year': {
       const since = now - 365 * DAY;
-      return conn.prepare(`
-        SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-        FROM traffic_month WHERE mac = ? AND bucket_ts >= ?
-        ORDER BY bucket_ts ASC
-      `).all(mac, since) as BucketPoint[];
+      const frag = trafficRowsSinceSql(since, mac);
+      const rows = conn.prepare(frag.sql).all(...frag.params) as BucketPoint[];
+      return aggregateRows(rows, bucketMonth);
     }
     case 'all': {
-      return conn.prepare(`
-        SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
-        FROM traffic_month WHERE mac = ?
-        ORDER BY bucket_ts ASC
-      `).all(mac) as BucketPoint[];
+      const frag = trafficRowsSinceSql(0, mac);
+      const rows = conn.prepare(frag.sql).all(...frag.params) as BucketPoint[];
+      return aggregateRows(rows, bucketMonth);
     }
   }
 }
 
-function makeBucketExpr(field: string, ms: number): string {
-  return `((${field}) / ${ms}) * ${ms}`;
+function bucketLocalDay(ts: number): number {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function aggregateRows(rows: BucketPoint[], bucketFn: (ts: number) => number): BucketPoint[] {
+  const map = new Map<number, BucketPoint>();
+  for (const r of rows) {
+    const bucket = bucketFn(r.bucket_ts);
+    const current = map.get(bucket) ?? { bucket_ts: bucket, bytes_down: 0, bytes_up: 0, peak_down_bps: 0, peak_up_bps: 0 };
+    current.bytes_down += Number(r.bytes_down ?? 0);
+    current.bytes_up += Number(r.bytes_up ?? 0);
+    current.peak_down_bps = Math.max(Number(current.peak_down_bps ?? 0), Number(r.peak_down_bps ?? 0));
+    current.peak_up_bps = Math.max(Number(current.peak_up_bps ?? 0), Number(r.peak_up_bps ?? 0));
+    map.set(bucket, current);
+  }
+  return [...map.values()].sort((a, b) => a.bucket_ts - b.bucket_ts);
 }
 
 export function getAlerts(limit = 50) {
@@ -339,59 +436,63 @@ export function getConcurrentDevices(minutes = 60 * 24): { ts: number; count: nu
  * 5-min table for the in-progress hour. Each row appears in exactly one source
  * table after rollup, so there's no double-counting.
  */
-function bytesSinceSql(since: number): { sql: string; params: number[] } {
+function bytesSinceSql(since: number): { sql: string; params: unknown[] } {
+  const rows = trafficRowsSinceSql(since);
+  return {
+    sql: `
+      SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
+      FROM (${rows.sql})
+      GROUP BY mac
+    `,
+    params: rows.params,
+  };
+}
+
+function trafficRowsSinceSql(since: number, mac?: string): { sql: string; params: unknown[] } {
   const now = Date.now();
   const startOfHour = (() => { const d = new Date(now); d.setMinutes(0, 0, 0); return d.getTime(); })();
   const startOfDay = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
   const startOfMonth = (() => { const d = new Date(now); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  const add = (table: string, start: number, end?: number) => {
+    const where: string[] = [];
+    if (mac) {
+      where.push('mac = ?');
+      params.push(mac);
+    }
+    where.push('bucket_ts >= ?');
+    params.push(start);
+    if (end !== undefined) {
+      where.push('bucket_ts < ?');
+      params.push(end);
+    }
+    parts.push(`
+      SELECT mac, bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
+      FROM ${table} WHERE ${where.join(' AND ')}
+    `);
+  };
+
   if (since >= startOfHour) {
-    // Window is inside the current hour — only 5min has data
-    return {
-      sql: `SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM traffic_5min WHERE bucket_ts >= ? GROUP BY mac`,
-      params: [since],
-    };
+    add('traffic_5min', since);
+    return { sql: parts.join(' UNION ALL '), params };
   }
   if (since >= startOfDay) {
-    return {
-      sql: `
-        SELECT mac, SUM(bd) AS bd, SUM(bu) AS bu FROM (
-          SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
-          UNION ALL
-          SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ? AND bucket_ts < ?
-        ) GROUP BY mac
-      `,
-      params: [startOfHour, since, startOfHour],
-    };
+    add('traffic_5min', startOfHour);
+    add('traffic_hour', since, startOfHour);
+    return { sql: parts.join(' UNION ALL '), params };
   }
   if (since >= startOfMonth) {
-    return {
-      sql: `
-        SELECT mac, SUM(bd) AS bd, SUM(bu) AS bu FROM (
-          SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
-          UNION ALL
-          SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ? AND bucket_ts < ?
-          UNION ALL
-          SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ? AND bucket_ts < ?
-        ) GROUP BY mac
-      `,
-      params: [startOfHour, startOfDay, startOfHour, since, startOfDay],
-    };
+    add('traffic_5min', startOfHour);
+    add('traffic_hour', startOfDay, startOfHour);
+    add('traffic_day', since, startOfDay);
+    return { sql: parts.join(' UNION ALL '), params };
   }
-  // Long-range: include month-level
-  return {
-    sql: `
-      SELECT mac, SUM(bd) AS bd, SUM(bu) AS bu FROM (
-        SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
-        UNION ALL
-        SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ? AND bucket_ts < ?
-        UNION ALL
-        SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ? AND bucket_ts < ?
-        UNION ALL
-        SELECT mac, bytes_down, bytes_up FROM traffic_month WHERE bucket_ts >= ? AND bucket_ts < ?
-      ) GROUP BY mac
-    `,
-    params: [startOfHour, startOfDay, startOfHour, startOfMonth, startOfDay, since, startOfMonth],
-  };
+  add('traffic_5min', startOfHour);
+  add('traffic_hour', startOfDay, startOfHour);
+  add('traffic_day', startOfMonth, startOfDay);
+  add('traffic_month', since, startOfMonth);
+  return { sql: parts.join(' UNION ALL '), params };
 }
 
 export function getTopTalkers(range: 'hour' | 'today' | 'week' | 'month' = 'today', limit = 10) {
@@ -628,29 +729,21 @@ export function getDailyReport(days = 30): {
   }
   const earliest = dayTimestamps[0];
 
-  // Aggregate per (mac, day) bytes from all granularity tables, then bucket-by-day in JS.
-  const rows = db().prepare(`
-    SELECT mac, bucket_ts AS ts, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
-    UNION ALL
-    SELECT mac, bucket_ts, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ?
-    UNION ALL
-    SELECT mac, bucket_ts, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ?
-    UNION ALL
-    SELECT mac, bucket_ts, bytes_down, bytes_up FROM traffic_month WHERE bucket_ts >= ?
-  `).all(earliest, earliest, earliest, earliest) as Array<{ mac: string; ts: number; bd: number; bu: number }>;
+  const frag = trafficRowsSinceSql(earliest);
+  const rows = db().prepare(frag.sql).all(...frag.params) as Array<{
+    mac: string; bucket_ts: number; bytes_down: number; bytes_up: number;
+  }>;
 
   // bucket each row to its day
   const map = new Map<string, Map<number, { bd: number; bu: number }>>();
   for (const r of rows) {
-    const d = new Date(r.ts);
-    d.setHours(0,0,0,0);
-    const dayTs = d.getTime();
+    const dayTs = bucketLocalDay(r.bucket_ts);
     if (dayTs < earliest) continue;
     let inner = map.get(r.mac);
     if (!inner) { inner = new Map(); map.set(r.mac, inner); }
     const e = inner.get(dayTs) ?? { bd: 0, bu: 0 };
-    e.bd += Number(r.bd ?? 0);
-    e.bu += Number(r.bu ?? 0);
+    e.bd += Number(r.bytes_down ?? 0);
+    e.bu += Number(r.bytes_up ?? 0);
     inner.set(dayTs, e);
   }
 
@@ -704,28 +797,19 @@ export function getDeviceDailyUsage(mac: string, days = 30): Array<{
   const today = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   const since = today - (days - 1) * DAY;
 
-  // Combine traffic_5min + traffic_hour + traffic_day, bucketed by day boundary
-  const rows = conn.prepare(`
-    WITH per_day AS (
-      SELECT (CAST(bucket_ts / 86400000 AS INTEGER) * 86400000) AS day_ts,
-             SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
-      FROM traffic_5min WHERE mac = ? AND bucket_ts >= ?
-      GROUP BY day_ts
-      UNION ALL
-      SELECT (CAST(bucket_ts / 86400000 AS INTEGER) * 86400000) AS day_ts,
-             SUM(bytes_down), SUM(bytes_up)
-      FROM traffic_hour WHERE mac = ? AND bucket_ts >= ?
-      GROUP BY day_ts
-      UNION ALL
-      SELECT bucket_ts AS day_ts, SUM(bytes_down), SUM(bytes_up)
-      FROM traffic_day WHERE mac = ? AND bucket_ts >= ?
-      GROUP BY day_ts
-    )
-    SELECT day_ts, SUM(bd) AS bytes_down, SUM(bu) AS bytes_up
-    FROM per_day
-    GROUP BY day_ts
-    ORDER BY day_ts DESC
-  `).all(mac, since, mac, since, mac, since) as Array<{ day_ts: number; bytes_down: number; bytes_up: number }>;
+  const frag = trafficRowsSinceSql(since, mac);
+  const sourceRows = conn.prepare(frag.sql).all(...frag.params) as Array<{
+    bucket_ts: number; bytes_down: number; bytes_up: number;
+  }>;
+  const byDay = new Map<number, { day_ts: number; bytes_down: number; bytes_up: number }>();
+  for (const r of sourceRows) {
+    const dayTs = bucketLocalDay(r.bucket_ts);
+    const current = byDay.get(dayTs) ?? { day_ts: dayTs, bytes_down: 0, bytes_up: 0 };
+    current.bytes_down += Number(r.bytes_down ?? 0);
+    current.bytes_up += Number(r.bytes_up ?? 0);
+    byDay.set(dayTs, current);
+  }
+  const rows = [...byDay.values()].sort((a, b) => b.day_ts - a.day_ts);
 
   return rows.map((r) => {
     const d = new Date(r.day_ts);
@@ -742,16 +826,12 @@ export function getDeviceDailyUsage(mac: string, days = 30): Array<{
 
 export function getDeviceStats(mac: string) {
   const c = db();
+  const allBytes = bytesSinceSql(0);
   const totals = c.prepare(`
-    SELECT
-      COALESCE(SUM(bd), 0) AS bytes_down, COALESCE(SUM(bu), 0) AS bytes_up
-    FROM (
-      SELECT SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM traffic_5min WHERE mac = ?
-      UNION ALL SELECT SUM(bytes_down), SUM(bytes_up) FROM traffic_hour WHERE mac = ?
-      UNION ALL SELECT SUM(bytes_down), SUM(bytes_up) FROM traffic_day WHERE mac = ?
-      UNION ALL SELECT SUM(bytes_down), SUM(bytes_up) FROM traffic_month WHERE mac = ?
-    )
-  `).get(mac, mac, mac, mac) as { bytes_down: number; bytes_up: number };
+    SELECT COALESCE(bd, 0) AS bytes_down, COALESCE(bu, 0) AS bytes_up
+    FROM (${allBytes.sql})
+    WHERE mac = ?
+  `).get(...allBytes.params, mac) as { bytes_down: number; bytes_up: number } | undefined;
 
   const peaks = c.prepare(`
     SELECT MAX(down_speed_bps) AS peak_down, MAX(up_speed_bps) AS peak_up

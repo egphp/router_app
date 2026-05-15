@@ -9,6 +9,7 @@ interface PrevSample {
   up_speed_bps: number;
   down_speed_bps: number;
   down_sum_kb: number;
+  online_seconds: number | null;
 }
 
 interface AccumulateResult {
@@ -48,7 +49,7 @@ export class Accumulator {
     `);
 
     this.lastSample = db.prepare(`
-      SELECT ts, up_speed_bps, down_speed_bps, down_sum_kb
+      SELECT ts, up_speed_bps, down_speed_bps, down_sum_kb, online_seconds
       FROM samples_raw
       WHERE mac = ? AND ts < ?
       ORDER BY ts DESC
@@ -65,8 +66,8 @@ export class Accumulator {
         peak_up_bps   = MAX(COALESCE(peak_up_bps, 0), excluded.peak_up_bps),
         active_sec = active_sec + excluded.active_sec,
         sample_count = sample_count + 1,
-        avg_down_bps = (COALESCE(avg_down_bps, 0) * (sample_count - 1) + excluded.avg_down_bps) / sample_count,
-        avg_up_bps   = (COALESCE(avg_up_bps, 0)   * (sample_count - 1) + excluded.avg_up_bps)   / sample_count
+        avg_down_bps = (COALESCE(avg_down_bps, 0) * traffic_5min.sample_count + excluded.avg_down_bps) / (traffic_5min.sample_count + 1),
+        avg_up_bps   = (COALESCE(avg_up_bps, 0)   * traffic_5min.sample_count + excluded.avg_up_bps)   / (traffic_5min.sample_count + 1)
     `);
 
     this.insertAlert = db.prepare(`
@@ -120,37 +121,32 @@ export class Accumulator {
         const onlineSec = isOnline ? Number((dev as any).onlineTime ?? 0) : 0;
 
         const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
-
-        // Filter Tenda firmware flicker: occasional samples report sum=0 for devices that
-        // are obviously not at zero (prev was non-trivial and we're not on a long gap).
-        // Treat these as a transient firmware glitch — clamp to the previous high-water mark
-        // so the recorded sample doesn't pollute downstream delta math.
-        let downSumKb = rawDownSumKb;
-        const flickerToZero =
-          prev != null &&
-          rawDownSumKb === 0 &&
-          prev.down_sum_kb >= 1 &&
-          (now - prev.ts) < 5 * 60_000;
-        if (flickerToZero) {
-          downSumKb = prev!.down_sum_kb;
-        }
-
-        this.insertSample.run({
-          mac,
-          ts: now,
-          ip: dev.hostIP || null,
-          online: isOnline ? 1 : 0,
-          up_speed_bps: upSpeed,
-          down_speed_bps: downSpeed,
-          down_sum_kb: downSumKb,
-          sessions,
-          online_seconds: onlineSec,
-        });
         const dtSec = prev ? Math.max(1, Math.round((now - prev.ts) / 1000)) : 30;
         // If we lost contact for more than 5 min, distrust the per-device counter delta —
         // the router may have rebooted, the device may have reconnected, or our poller
         // restarted. In all those cases the gap is too long to safely credit as one delta.
         const gapTooLarge = dtSec > 5 * 60;
+        const sessionRestarted = Boolean(
+          prev &&
+          onlineSec > 0 &&
+          Number(prev.online_seconds ?? 0) > 0 &&
+          onlineSec < Number(prev.online_seconds ?? 0)
+        );
+
+        let downSumKb = rawDownSumKb;
+        let counterNoise = false;
+        let realCounterReset = false;
+        if (prev && !isReboot && !gapTooLarge && rawDownSumKb < prev.down_sum_kb) {
+          // Tenda firmware can report a transient 0 or tiny post-zero value for the same
+          // session. Keep the stored counter at the high-water mark so the next normal
+          // sample is not credited a second time.
+          if (sessionRestarted) {
+            realCounterReset = true;
+          } else {
+            downSumKb = prev.down_sum_kb;
+            counterNoise = true;
+          }
+        }
 
         let deltaDownBytes = 0;
         if (!prev) {
@@ -165,23 +161,20 @@ export class Accumulator {
           // Long gap without a confirmed reboot: re-baseline silently to avoid double-counting.
           log.info('accumulator: long gap, re-baselining device counter', { mac, dtSec, prevKb: prev.down_sum_kb, curKb: downSumKb });
           deltaDownBytes = 0;
+        } else if (counterNoise) {
+          deltaDownBytes = 0;
+        } else if (realCounterReset) {
+          log.info('accumulator: per-device session counter reset (treating as real)', {
+            mac,
+            prevKb: prev.down_sum_kb,
+            curKb: downSumKb,
+            prevOnlineSec: prev.online_seconds,
+            curOnlineSec: onlineSec,
+          });
+          deltaDownBytes = downSumKb * 1024;
         } else {
           const rawDeltaKb = downSumKb - prev.down_sum_kb;
-          if (rawDeltaKb < 0) {
-            // Counter went backwards. Tenda firmware sometimes flickers per-device counters
-            // briefly to 0 even when the device stays online (especially for low-traffic IoT).
-            // Heuristic: only credit if the post-reset counter is meaningfully larger than the
-            // jitter (≥ 64 KB) AND we're not on a fast flicker (dtSec < 30). Below that, treat
-            // it as transient noise — credit 0, but keep prev's counter as the high-water mark
-            // by writing the higher value back to samples_raw on the next call.
-            if (downSumKb >= 64 && dtSec >= 10) {
-              log.info('accumulator: per-device counter reset (treating as real)', { mac, prevKb: prev.down_sum_kb, curKb: downSumKb });
-              deltaDownBytes = downSumKb * 1024;
-            } else {
-              // Silent flicker; do nothing. Don't credit, don't warn.
-              deltaDownBytes = 0;
-            }
-          } else if (rawDeltaKb > 5 * 1024 * 1024) {
+          if (rawDeltaKb > 5 * 1024 * 1024) {
             // Sanity cap: > 5 GB in one short cycle is implausible for a home network.
             log.warn('accumulator: implausible delta clamped', { mac, rawDeltaKb, dtSec });
             deltaDownBytes = 0;
@@ -205,7 +198,20 @@ export class Accumulator {
           deltaUpBytes = 0;
         }
 
+        this.insertSample.run({
+          mac,
+          ts: now,
+          ip: dev.hostIP || null,
+          online: isOnline ? 1 : 0,
+          up_speed_bps: upSpeed,
+          down_speed_bps: downSpeed,
+          down_sum_kb: downSumKb,
+          sessions,
+          online_seconds: onlineSec,
+        });
+
         const bucket = bucket5Min(now);
+        const activeSec = prev && !gapTooLarge && isOnline ? dtSec : 0;
         this.upsertBucket.run({
           mac,
           bucket_ts: bucket,
@@ -213,7 +219,7 @@ export class Accumulator {
           bytes_up: Math.max(0, deltaUpBytes),
           speed_down: downSpeed,
           speed_up: upSpeed,
-          active_sec: isOnline ? dtSec : 0,
+          active_sec: activeSec,
         });
 
         totalDown += deltaDownBytes;

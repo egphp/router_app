@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
+    "repair:traffic": "tsx src/repair-traffic.ts",
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {

@@ -8,9 +8,9 @@ import { log } from './logger.js';
  *   traffic_hour  → traffic_day    when bucket_ts < current day
  *   traffic_day   → traffic_month  when bucket_ts < current month
  *
- * The source row is DELETED after being summed into the destination — this is critical
- * to prevent double-counting when queries UNION across granularities. Previously the
- * rollup left rows in place and then re-ran every 5 minutes, multiplying totals.
+ * 5-minute source rows are deleted after hourly promotion. Hour/day rows are kept
+ * for analytics, while day/month aggregates are replaced idempotently on each run.
+ * Query code must avoid overlapping granularities when computing totals.
  */
 export class RollupWorker {
   constructor(private readonly db: Database.Database) {}
@@ -22,29 +22,26 @@ export class RollupWorker {
       to: 'traffic_hour',
       bucketFn: bucketHour,
       cutoff: bucketHour(now),
-      withSampleCount: true,
     });
   }
 
   rollupDay(now: number): void {
-    this.rollupGeneric({
+    this.rollupReplaceAggregate({
       now,
       from: 'traffic_hour',
       to: 'traffic_day',
       bucketFn: bucketDay,
       cutoff: bucketDay(now),
-      withSampleCount: false,
     });
   }
 
   rollupMonth(now: number): void {
-    this.rollupGeneric({
+    this.rollupReplaceAggregate({
       now,
       from: 'traffic_day',
       to: 'traffic_month',
       bucketFn: bucketMonth,
       cutoff: bucketMonth(now),
-      withSampleCount: false,
     });
   }
 
@@ -54,7 +51,6 @@ export class RollupWorker {
     to: string;
     bucketFn: (ts: number) => number;
     cutoff: number;
-    withSampleCount: boolean;
   }): void {
     const rows = this.db.prepare(`
       SELECT mac, bucket_ts, bytes_down, bytes_up, active_sec, peak_down_bps, peak_up_bps
@@ -97,6 +93,66 @@ export class RollupWorker {
     txn();
 
     log.info(`rollup: ${opts.from} → ${opts.to}`, { rows: rows.length, cutoff: opts.cutoff });
+  }
+
+  private rollupReplaceAggregate(opts: {
+    now: number;
+    from: string;
+    to: string;
+    bucketFn: (ts: number) => number;
+    cutoff: number;
+  }): void {
+    const rows = this.db.prepare(`
+      SELECT mac, bucket_ts, bytes_down, bytes_up, active_sec, peak_down_bps, peak_up_bps
+      FROM ${opts.from} WHERE bucket_ts < ?
+    `).all(opts.cutoff) as Array<{
+      mac: string; bucket_ts: number;
+      bytes_down: number; bytes_up: number; active_sec: number;
+      peak_down_bps: number | null; peak_up_bps: number | null;
+    }>;
+    if (rows.length === 0) return;
+
+    const grouped = new Map<string, {
+      mac: string; bucket_ts: number; bytes_down: number; bytes_up: number; active_sec: number;
+      peak_down_bps: number; peak_up_bps: number;
+    }>();
+    for (const r of rows) {
+      const bucketTs = opts.bucketFn(r.bucket_ts);
+      const key = `${r.mac}|${bucketTs}`;
+      const g = grouped.get(key) ?? {
+        mac: r.mac,
+        bucket_ts: bucketTs,
+        bytes_down: 0,
+        bytes_up: 0,
+        active_sec: 0,
+        peak_down_bps: 0,
+        peak_up_bps: 0,
+      };
+      g.bytes_down += Number(r.bytes_down ?? 0);
+      g.bytes_up += Number(r.bytes_up ?? 0);
+      g.active_sec += Number(r.active_sec ?? 0);
+      g.peak_down_bps = Math.max(g.peak_down_bps, Number(r.peak_down_bps ?? 0));
+      g.peak_up_bps = Math.max(g.peak_up_bps, Number(r.peak_up_bps ?? 0));
+      grouped.set(key, g);
+    }
+
+    const upsert = this.db.prepare(`
+      INSERT INTO ${opts.to} (mac, bucket_ts, bytes_down, bytes_up, active_sec, peak_down_bps, peak_up_bps)
+      VALUES (@mac, @bucket_ts, @bytes_down, @bytes_up, @active_sec, @peak_down_bps, @peak_up_bps)
+      ON CONFLICT(mac, bucket_ts) DO UPDATE SET
+        bytes_down = excluded.bytes_down,
+        bytes_up = excluded.bytes_up,
+        active_sec = excluded.active_sec,
+        peak_down_bps = excluded.peak_down_bps,
+        peak_up_bps = excluded.peak_up_bps
+    `);
+
+    const txn = this.db.transaction(() => {
+      for (const g of grouped.values()) upsert.run(g);
+    });
+    txn();
+
+    log.info(`rollup: ${opts.from} → ${opts.to} replaced`, { rows: rows.length, groups: grouped.size, cutoff: opts.cutoff });
   }
 
   /** Retention prune. Keep raw samples 48h; rolled buckets are kept by their next-level table. */

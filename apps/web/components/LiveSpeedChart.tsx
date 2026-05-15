@@ -6,11 +6,16 @@ import { fetcher } from '../lib/fetcher';
 import { formatBps } from '../lib/format';
 
 interface SpeedPoint { ts: number; down_bps: number; up_bps: number }
+interface LiveSpeedResponse {
+  speeds: SpeedPoint[];
+  source?: 'router-best' | 'wan' | 'devices';
+  latest_ts?: number | null;
+}
 
 export function LiveSpeedChart() {
   const lastGood = useRef<SpeedPoint[]>([]);
-  const { data, error } = useSWR<{ speeds: SpeedPoint[] }>('/api/live?minutes=60', fetcher, {
-    refreshInterval: 10000,
+  const { data, error } = useSWR<LiveSpeedResponse>('/api/live?minutes=60', fetcher, {
+    refreshInterval: 5000,
     keepPreviousData: true,
     revalidateOnFocus: false,
     shouldRetryOnError: true,
@@ -25,11 +30,19 @@ export function LiveSpeedChart() {
   const speeds = data?.speeds && data.speeds.length > 0 ? data.speeds : lastGood.current;
 
   const rows = useMemo(() => speeds.map((p) => ({
-    t: new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    t: new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     down: p.down_bps,
     up: p.up_bps,
   })), [speeds]);
 
+  const latest = speeds[speeds.length - 1] ?? null;
+  const latestAgeSec = latest ? Math.max(0, Math.round((Date.now() - latest.ts) / 1000)) : null;
+  const sourceLabel = data?.source === 'devices'
+    ? 'Devices'
+    : data?.source === 'wan'
+      ? 'WAN'
+      : 'Router best';
+  const isFresh = latestAgeSec !== null && latestAgeSec <= 25;
   const isStale = data?.speeds.length === 0 && lastGood.current.length === 0;
   const errored = !!error && rows.length === 0;
 
@@ -44,9 +57,17 @@ export function LiveSpeedChart() {
             {error && <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse" title="last fetch failed; showing cached data" />}
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[10px] sm:text-[11px] shrink-0">
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>Download</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>Upload</span>
+        <div className="flex items-center justify-end gap-2 text-[10px] sm:text-[11px] shrink-0 flex-wrap">
+          {latest && (
+            <>
+              <span className="font-semibold text-blue-300">↓ {formatBps(latest.down_bps, 0)}</span>
+              <span className="font-semibold text-orange-300">↑ {formatBps(latest.up_bps, 0)}</span>
+              <span className={isFresh ? 'text-accent-green' : 'text-accent-amber'}>
+                {sourceLabel} · {latestAgeSec}s
+              </span>
+            </>
+          )}
+          {!latest && <span className="text-slate-500">{sourceLabel}</span>}
         </div>
       </div>
       <div className="flex-1 min-h-[80px]">
