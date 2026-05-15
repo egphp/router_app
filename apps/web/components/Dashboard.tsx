@@ -30,9 +30,9 @@ interface Status {
   alerts: number;
 }
 
-type WidgetId = 'live-speed' | 'top-talkers' | 'category-chart' | 'concurrent' | 'anomalies' | 'devices';
+type WidgetId = 'top-talkers' | 'category-chart' | 'concurrent' | 'anomalies' | 'devices';
 
-const DEFAULT_ORDER: WidgetId[] = ['live-speed', 'top-talkers', 'category-chart', 'concurrent', 'anomalies', 'devices'];
+const DEFAULT_ORDER: WidgetId[] = ['top-talkers', 'category-chart', 'concurrent', 'anomalies', 'devices'];
 const STORAGE_KEY = 'tenda.dashboardOrder.v1';
 const EDIT_KEY = 'tenda.dashboardEdit.v1';
 
@@ -54,7 +54,6 @@ function loadOrder(): WidgetId[] {
 }
 
 const WIDGET_LABELS: Record<WidgetId, string> = {
-  'live-speed': 'Live speed chart',
   'top-talkers': 'Top talkers',
   'category-chart': 'Category breakdown chart',
   concurrent: 'Concurrent devices',
@@ -125,8 +124,6 @@ export function Dashboard() {
 
   const renderWidget = (id: WidgetId) => {
     switch (id) {
-      case 'live-speed':
-        return <LiveSpeedChart />;
       case 'top-talkers':
         return <TopTalkers />;
       case 'category-chart':
@@ -147,30 +144,33 @@ export function Dashboard() {
       <AlertBanner />
       <TelemetryBar />
 
-      {/* Fixed status row — always first, not reorderable */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
-        <StatCard
-          label="Router uptime"
-          value={formatDuration(status?.uptime_sec ?? 0)}
-          hint={status ? `${status.online_count} online of ${status.total_devices} known` : '...'}
-          icon={<Activity size={16} />}
-          tone={status?.connected ? 'green' : 'red'}
-        />
-        <StatCard
-          label="Today (download)"
-          value={formatBytes(status?.bytes_today_down ?? 0)}
-          hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
-          icon={<Download size={16} />}
-        />
-        <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
-        <StatCard
-          label="Active alerts"
-          value={status?.alerts ?? 0}
-          hint={status?.alerts ? 'see Alerts page' : 'all clear'}
-          icon={<Bell size={16} />}
-          tone={status && status.alerts > 0 ? 'red' : 'default'}
-        />
-        <CategoryStatCard />
+      {/* Fixed status row — always first, not reorderable. Stats on left, Live Speed on right */}
+      <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,5fr)_minmax(0,3fr)] gap-3 sm:gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3 self-start">
+          <StatCard
+            label="Router uptime"
+            value={formatDuration(status?.uptime_sec ?? 0)}
+            hint={status ? `${status.online_count} online of ${status.total_devices} known` : '...'}
+            icon={<Activity size={16} />}
+            tone={status?.connected ? 'green' : 'red'}
+          />
+          <StatCard
+            label="Today (download)"
+            value={formatBytes(status?.bytes_today_down ?? 0)}
+            hint={`↑ ${formatBytes(status?.bytes_today_up ?? 0)} (estimated)`}
+            icon={<Download size={16} />}
+          />
+          <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
+          <StatCard
+            label="Active alerts"
+            value={status?.alerts ?? 0}
+            hint={status?.alerts ? 'see Alerts page' : 'all clear'}
+            icon={<Bell size={16} />}
+            tone={status && status.alerts > 0 ? 'red' : 'default'}
+          />
+          <CategoryStatCard />
+        </div>
+        <LiveSpeedChart />
       </div>
 
       {/* Edit toolbar */}
