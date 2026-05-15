@@ -205,10 +205,10 @@ export class RouterClient {
         return undefined;
       };
       return {
-        cpuUsage: num((x as any).cpuUsed ?? (x as any).cpu ?? (x as any).cpuUsage),
-        memUsage: num((x as any).memUsed ?? (x as any).mem ?? (x as any).memUsage ?? (x as any).memoryUsage),
-        firmware: (x as any).softVer ?? (x as any).firmware ?? (x as any).fwVersion,
-        model: (x as any).productName ?? (x as any).model,
+        cpuUsage: num((x as any).cpuUsePercent ?? (x as any).cpuUsed ?? (x as any).cpu ?? (x as any).cpuUsage),
+        memUsage: num((x as any).memoryUsePercent ?? (x as any).memUsed ?? (x as any).mem ?? (x as any).memUsage ?? (x as any).memoryUsage),
+        firmware: (x as any).sysInfoSoftVersion ?? (x as any).softVer ?? (x as any).firmware ?? (x as any).fwVersion,
+        model: (x as any).sysInfoDevName ?? (x as any).productName ?? (x as any).model,
         raw: x,
       };
     } catch (e) {

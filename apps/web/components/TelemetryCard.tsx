@@ -90,8 +90,12 @@ export function TelemetryCard() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {wans.map((w, i) => {
-              const totalDown = getNum(w, 'downBytes', 'downloadBytes', 'rxBytes', 'totalDown', 'downByte');
-              const totalUp = getNum(w, 'upBytes', 'uploadBytes', 'txBytes', 'totalUp', 'upByte');
+              // Tenda W30E returns FlowUpstream/FlowDownstream as MB strings (cumulative).
+              // Other firmwares may use different keys; try a few.
+              const dlMB = getNum(w, 'FlowDownstream', 'downMB', 'downloadMB');
+              const ulMB = getNum(w, 'FlowUpstream', 'upMB', 'uploadMB');
+              const totalDown = dlMB !== undefined ? dlMB * 1024 * 1024 : getNum(w, 'downBytes', 'downloadBytes', 'rxBytes');
+              const totalUp = ulMB !== undefined ? ulMB * 1024 * 1024 : getNum(w, 'upBytes', 'uploadBytes', 'txBytes');
               const speedDown = getNum(w, 'downSpeed', 'rxSpeed', 'downBps');
               const speedUp = getNum(w, 'upSpeed', 'txSpeed', 'upBps');
               return (
