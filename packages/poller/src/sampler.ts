@@ -5,17 +5,20 @@ import { OutageMonitor } from './outage.js';
 import { RollupWorker } from './rollup.js';
 import { IpcBroadcaster } from './ipc.js';
 import { SecurityScanner } from './security.js';
+import { SystemLogPuller } from './system-log-puller.js';
 import { parseRouterUptime, MIN } from '@tenda/shared';
 import { log } from './logger.js';
 
 export class Sampler {
   private timer: NodeJS.Timeout | null = null;
   private rollupTimer: NodeJS.Timeout | null = null;
+  private logPullTimer: NodeJS.Timeout | null = null;
   private lastUptimeSec = 0;
   private accumulator: Accumulator;
   private outage: OutageMonitor;
   private rollup: RollupWorker;
   private security: SecurityScanner;
+  private logPuller: SystemLogPuller;
 
   private insertRouterState: Database.Statement;
 
@@ -29,6 +32,7 @@ export class Sampler {
     this.outage = new OutageMonitor(db);
     this.rollup = new RollupWorker(db);
     this.security = new SecurityScanner(db);
+    this.logPuller = new SystemLogPuller(db, router);
     this.insertRouterState = db.prepare(`
       INSERT OR REPLACE INTO router_state (ts, uptime_sec, is_reboot, online_count) VALUES (?, ?, ?, ?)
     `);
@@ -43,11 +47,17 @@ export class Sampler {
       this.runCycle().catch((e) => log.error('cycle error', String(e)));
     }, this.intervalMs);
     this.rollupTimer = setInterval(() => this.runRollups(), 5 * MIN);
+    // Pull router's own system/attack log every 2 minutes
+    this.logPuller.pull().catch((e) => log.warn('initial log pull error', String(e)));
+    this.logPullTimer = setInterval(() => {
+      this.logPuller.pull().catch((e) => log.warn('log pull error', String(e)));
+    }, 2 * MIN);
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     if (this.rollupTimer) clearInterval(this.rollupTimer);
+    if (this.logPullTimer) clearInterval(this.logPullTimer);
   }
 
   private async runCycle(): Promise<void> {
@@ -100,6 +110,7 @@ export class Sampler {
   private runRollups(): void {
     const now = Date.now();
     try {
+      this.rollup.repairDoubleCounting(now);
       this.rollup.rollupHour(now);
       this.rollup.rollupDay(now);
       this.rollup.rollupMonth(now);

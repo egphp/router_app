@@ -43,10 +43,12 @@ export function DeviceDetailClient({ device, initialStats }: {
     device: Device;
     stats: typeof initialStats;
     traffic: Array<{ bucket_ts: number; bytes_down: number; bytes_up: number; peak_down_bps?: number; peak_up_bps?: number }>;
+    attacks: { summary: Array<{ attack_kind: string; events: number; total: number; latest: number }>; recent: Array<{ ts: number; attack_kind: string; attack_count: number; message: string }> };
   }>(`/api/devices/${encodeURIComponent(device.mac)}?range=${range}`, fetcher, { refreshInterval: 15000 });
 
   const stats = data?.stats ?? initialStats;
   const traffic = data?.traffic ?? [];
+  const attacks = data?.attacks;
 
   const chartData = useMemo(() => traffic.map((p) => ({
     t: formatBucket(p.bucket_ts, range),
@@ -173,6 +175,37 @@ export function DeviceDetailClient({ device, initialStats }: {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {attacks && (attacks.summary.length > 0 || attacks.recent.length > 0) && (
+        <div className="card p-5 border-l-4 border-l-accent-red animate-fade-in">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-accent-red">⚠</span>
+            <div className="stat-label">Attack history (from router log)</div>
+          </div>
+          {attacks.summary.length > 0 && (
+            <div className="flex gap-2 flex-wrap mb-3">
+              {attacks.summary.map((s) => (
+                <div key={s.attack_kind} className="px-3 py-2 bg-accent-red/10 border border-accent-red/30 rounded text-sm">
+                  <div className="text-accent-red font-bold">{s.attack_kind} — {s.total}</div>
+                  <div className="text-xs text-slate-400">{s.events} events · latest {new Date(s.latest).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {attacks.recent.length > 0 && (
+            <details>
+              <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-200">{attacks.recent.length} recent events</summary>
+              <div className="mt-2 space-y-1 text-[11px] font-mono max-h-48 overflow-y-auto">
+                {attacks.recent.map((r, i) => (
+                  <div key={i} className="text-slate-400 border-l-2 border-accent-red/40 pl-2 py-0.5">
+                    <span className="text-slate-500">{new Date(r.ts).toLocaleString()}</span> · <span className="text-accent-red">{r.attack_kind}×{r.attack_count}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
 
       <div className="card p-5">
         <div className="stat-label mb-3">Peak speed</div>

@@ -5,6 +5,12 @@ import { TopNav } from '../components/TopNav';
 export const metadata: Metadata = {
   title: 'Tenda Monitor',
   description: 'Per-device bandwidth, traffic history, and alerts for your Tenda router',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    title: 'Tenda Monitor',
+    statusBarStyle: 'black-translucent',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.tenda.monitor.syslog-relay</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/node</string>
+      <string>/Users/michaeltawfik/Documents/tenda_traffic/deploy/syslog-relay.js</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>FROM_PORT</key>
+      <string>514</string>
+      <key>TO_HOST</key>
+      <string>127.0.0.1</string>
+      <key>TO_PORT</key>
+      <string>5140</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/michaeltawfik/Library/Logs/tenda-monitor/syslog-relay.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/michaeltawfik/Library/Logs/tenda-monitor/syslog-relay.error.log</string>
+  </dict>
+</plist>

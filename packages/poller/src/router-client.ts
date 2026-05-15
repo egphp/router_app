@@ -182,18 +182,21 @@ export class RouterClient {
     return this.getSystemStatus();
   }
 
-  /** Attempts to read router system log via firmware endpoint. */
-  async getSystemLog(): Promise<string[]> {
+  /**
+   * Reads the router's system log. sysLogType:
+   *   0 = all, 1 = system events (login/sync), 2 = attack log (ARP/DDoS), 3 = quits
+   */
+  async getSystemLog(sysLogType = 0): Promise<Array<{ ID: number; sysLogTime: string; sysLogType: number; sysLogMsg: string }>> {
     try {
-      const r = await this.call<{ getSysLog?: any; getLogInfo?: any }>(
-        ['getSysLog'],
-        { getSysLog: '' },
+      const r = await this.call<{ getSystemLog: any }>(
+        ['getSystemLog'],
+        { getSystemLog: { sysLogType } },
       );
-      const log = r.getSysLog || r.getLogInfo;
-      if (typeof log === 'string') return log.split(/\r?\n/).filter(Boolean);
-      if (Array.isArray(log)) return log.map(String);
+      const entries = r.getSystemLog;
+      if (Array.isArray(entries)) return entries;
       return [];
     } catch (e) {
+      log.warn('router.getSystemLog failed', String(e));
       return [];
     }
   }

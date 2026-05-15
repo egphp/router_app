@@ -16,13 +16,26 @@ export interface SecurityCheck {
  */
 export class SecurityScanner {
   private insertAlert: Database.Statement;
-  private lastAlertByKey = new Map<string, number>();
+  private findRecentAlert: Database.Statement;
   private knownLocallyAdministered = new Set<string>();
+  // After a user dismisses an alert we suppress the same rule+mac for this long.
+  // Keeps the page from becoming spam when the underlying condition (e.g. Mac
+  // Studio always has lots of connections) is permanent.
+  private readonly DEDUPE_AFTER_DISMISS_MS = 24 * 60 * 60 * 1000;
+  private readonly DEDUPE_DEFAULT_MS = 60 * 60 * 1000;
 
   constructor(private readonly db: Database.Database) {
     this.insertAlert = db.prepare(
       `INSERT INTO alerts (kind, mac, payload, created_at) VALUES (?, ?, ?, ?)`
     );
+    // Find the most recent alert for this rule+mac and whether it was dismissed.
+    this.findRecentAlert = db.prepare(`
+      SELECT created_at, dismissed_at FROM alerts
+      WHERE kind = 'security'
+        AND (mac IS ? OR mac = ?)
+        AND json_extract(payload, '$.rule') = ?
+      ORDER BY id DESC LIMIT 1
+    `);
   }
 
   scan(now: number, devices: RouterDevice[]): SecurityCheck[] {
@@ -112,13 +125,21 @@ export class SecurityScanner {
       }
     }
 
-    // Persist (deduped: same rule+mac fires at most once per hour)
-    const dedupeMs = 60 * 60 * 1000;
+    // Persist with smart dedupe: respect user-dismissed alerts for 24h to prevent
+    // spam when the underlying condition is a known/accepted state (e.g. Mac Studio
+    // permanently has 200+ connections from normal app traffic).
     for (const c of out) {
-      const key = `${c.rule}|${c.mac ?? ''}`;
-      const last = this.lastAlertByKey.get(key) ?? 0;
-      if (now - last < dedupeMs) continue;
-      this.lastAlertByKey.set(key, now);
+      const macParam = c.mac;
+      const recent = this.findRecentAlert.get(macParam, macParam, c.rule) as
+        | { created_at: number; dismissed_at: number | null }
+        | undefined;
+      if (recent) {
+        const cooldown = recent.dismissed_at
+          ? this.DEDUPE_AFTER_DISMISS_MS
+          : this.DEDUPE_DEFAULT_MS;
+        const refTs = recent.dismissed_at ?? recent.created_at;
+        if (now - refTs < cooldown) continue;
+      }
       try {
         this.insertAlert.run(
           'security',

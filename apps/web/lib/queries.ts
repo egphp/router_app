@@ -35,47 +35,31 @@ export interface RouterSnapshot {
 
 export function getLatestDevices(): DeviceRow[] {
   const conn = db();
-  const startOfDay = (() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  })();
+  const startOfDay = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
 
-  // Latest sample per device
+  const todayBytes = bytesSinceSql(startOfDay);
+  const allBytes = bytesSinceSql(0);
+
   const rows = conn.prepare(`
     WITH latest AS (
       SELECT mac, MAX(ts) AS ts FROM samples_raw GROUP BY mac
     ),
-    today_5 AS (
-      SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
-      FROM traffic_5min WHERE bucket_ts >= @startOfDay GROUP BY mac
-    ),
-    today_h AS (
-      SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
-      FROM traffic_hour WHERE bucket_ts >= @startOfDay GROUP BY mac
-    ),
-    all_5 AS (SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM traffic_5min GROUP BY mac),
-    all_h AS (SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM traffic_hour GROUP BY mac),
-    all_d AS (SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM traffic_day GROUP BY mac),
-    all_m AS (SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM traffic_month GROUP BY mac)
+    today AS (${todayBytes.sql}),
+    alltime AS (${allBytes.sql})
     SELECT d.mac, d.hostname, d.router_remark, d.custom_label, d.vendor, d.category,
            d.is_new, d.last_seen, d.first_seen,
            s.ip, s.online, s.up_speed_bps, s.down_speed_bps,
-           COALESCE(t5.bd, 0) + COALESCE(th.bd, 0) AS bytes_today,
-           COALESCE(t5.bu, 0) + COALESCE(th.bu, 0) AS bytes_up_today,
-           COALESCE(a5.bd, 0) + COALESCE(ah.bd, 0) + COALESCE(ad.bd, 0) + COALESCE(am.bd, 0) AS bytes_total,
-           COALESCE(a5.bu, 0) + COALESCE(ah.bu, 0) + COALESCE(ad.bu, 0) + COALESCE(am.bu, 0) AS bytes_up_total
+           COALESCE(td.bd, 0) AS bytes_today,
+           COALESCE(td.bu, 0) AS bytes_up_today,
+           COALESCE(at.bd, 0) AS bytes_total,
+           COALESCE(at.bu, 0) AS bytes_up_total
     FROM devices d
     LEFT JOIN latest l ON l.mac = d.mac
     LEFT JOIN samples_raw s ON s.mac = d.mac AND s.ts = l.ts
-    LEFT JOIN today_5 t5 ON t5.mac = d.mac
-    LEFT JOIN today_h th ON th.mac = d.mac
-    LEFT JOIN all_5 a5 ON a5.mac = d.mac
-    LEFT JOIN all_h ah ON ah.mac = d.mac
-    LEFT JOIN all_d ad ON ad.mac = d.mac
-    LEFT JOIN all_m am ON am.mac = d.mac
+    LEFT JOIN today td ON td.mac = d.mac
+    LEFT JOIN alltime at ON at.mac = d.mac
     ORDER BY bytes_today DESC, d.last_seen DESC
-  `).all({ startOfDay }) as DeviceRow[];
+  `).all(...todayBytes.params, ...allBytes.params) as DeviceRow[];
   return rows.map((r) => ({
     ...r,
     online: (r.online ?? 0) as 0 | 1,
@@ -328,8 +312,68 @@ export function getConcurrentDevices(minutes = 60 * 24): { ts: number; count: nu
 }
 
 /** Top-N talkers in a window. */
+/**
+ * Helper: returns the right "bytes per mac since timestamp" SQL fragment. Picks
+ * the coarsest granularity table that fully covers the window, plus the live
+ * 5-min table for the in-progress hour. Each row appears in exactly one source
+ * table after rollup, so there's no double-counting.
+ */
+function bytesSinceSql(since: number): { sql: string; params: number[] } {
+  const now = Date.now();
+  const startOfHour = (() => { const d = new Date(now); d.setMinutes(0, 0, 0); return d.getTime(); })();
+  const startOfDay = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  const startOfMonth = (() => { const d = new Date(now); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  if (since >= startOfHour) {
+    // Window is inside the current hour — only 5min has data
+    return {
+      sql: `SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu FROM traffic_5min WHERE bucket_ts >= ? GROUP BY mac`,
+      params: [since],
+    };
+  }
+  if (since >= startOfDay) {
+    return {
+      sql: `
+        SELECT mac, SUM(bd) AS bd, SUM(bu) AS bu FROM (
+          SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
+          UNION ALL
+          SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ? AND bucket_ts < ?
+        ) GROUP BY mac
+      `,
+      params: [startOfHour, since, startOfHour],
+    };
+  }
+  if (since >= startOfMonth) {
+    return {
+      sql: `
+        SELECT mac, SUM(bd) AS bd, SUM(bu) AS bu FROM (
+          SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
+          UNION ALL
+          SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ? AND bucket_ts < ?
+          UNION ALL
+          SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ? AND bucket_ts < ?
+        ) GROUP BY mac
+      `,
+      params: [startOfHour, startOfDay, startOfHour, since, startOfDay],
+    };
+  }
+  // Long-range: include month-level
+  return {
+    sql: `
+      SELECT mac, SUM(bd) AS bd, SUM(bu) AS bu FROM (
+        SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
+        UNION ALL
+        SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ? AND bucket_ts < ?
+        UNION ALL
+        SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ? AND bucket_ts < ?
+        UNION ALL
+        SELECT mac, bytes_down, bytes_up FROM traffic_month WHERE bucket_ts >= ? AND bucket_ts < ?
+      ) GROUP BY mac
+    `,
+    params: [startOfHour, startOfDay, startOfHour, startOfMonth, startOfDay, since, startOfMonth],
+  };
+}
+
 export function getTopTalkers(range: 'hour' | 'today' | 'week' | 'month' = 'today', limit = 10) {
-  const conn = db();
   const now = Date.now();
   let since: number;
   switch (range) {
@@ -338,22 +382,16 @@ export function getTopTalkers(range: 'hour' | 'today' | 'week' | 'month' = 'toda
     case 'week': since = now - 7 * DAY; break;
     case 'month': since = now - 30 * DAY; break;
   }
-  return conn.prepare(`
+  const { sql, params } = bytesSinceSql(since);
+  return db().prepare(`
     SELECT d.mac, COALESCE(d.custom_label, d.router_remark, d.hostname, d.mac) AS label,
            d.category, d.vendor,
-           SUM(t.bd) AS bytes_down, SUM(t.bu) AS bytes_up
-    FROM (
-      SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
-      UNION ALL
-      SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ?
-      UNION ALL
-      SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ?
-    ) t
-    JOIN devices d ON d.mac = t.mac
-    GROUP BY d.mac
-    ORDER BY (SUM(t.bd) + SUM(t.bu)) DESC
+           COALESCE(t.bd, 0) AS bytes_down, COALESCE(t.bu, 0) AS bytes_up
+    FROM devices d
+    LEFT JOIN (${sql}) t ON t.mac = d.mac
+    ORDER BY (COALESCE(t.bd, 0) + COALESCE(t.bu, 0)) DESC
     LIMIT ?
-  `).all(since, since, since, limit);
+  `).all(...params, limit);
 }
 
 /** Anomaly detection: today's hourly bytes per device vs trailing 14-day average for that hour. */
@@ -401,7 +439,6 @@ export function getDeviceSessions(mac: string, limit = 50) {
 
 /** Returns categorical breakdown (by hostName→category mapping in devices). */
 export function getCategoryBreakdown(range: 'today' | 'week' | 'month' = 'today') {
-  const conn = db();
   const now = Date.now();
   let since: number;
   switch (range) {
@@ -409,21 +446,195 @@ export function getCategoryBreakdown(range: 'today' | 'week' | 'month' = 'today'
     case 'week': since = now - 7 * DAY; break;
     case 'month': since = now - 30 * DAY; break;
   }
-  return conn.prepare(`
+  const { sql, params } = bytesSinceSql(since);
+  return db().prepare(`
     SELECT COALESCE(d.category, 'unknown') AS category,
            SUM(t.bd) AS bytes_down, SUM(t.bu) AS bytes_up,
            COUNT(DISTINCT d.mac) AS device_count
-    FROM (
-      SELECT mac, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
-      UNION ALL
-      SELECT mac, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ?
-      UNION ALL
-      SELECT mac, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ?
-    ) t
+    FROM (${sql}) t
     JOIN devices d ON d.mac = t.mac
     GROUP BY COALESCE(d.category, 'unknown')
     ORDER BY (SUM(t.bd) + SUM(t.bu)) DESC
-  `).all(since, since, since);
+  `).all(...params);
+}
+
+/**
+ * Per-device consumption: returns one row per device with daily/weekly/monthly/yearly totals.
+ * Used by /consumption page.
+ */
+export function getConsumption(): Array<{
+  mac: string; label: string; category: string | null; vendor: string | null;
+  today_down: number; today_up: number;
+  week_down: number; week_up: number;
+  month_down: number; month_up: number;
+  year_down: number; year_up: number;
+  total_down: number; total_up: number;
+}> {
+  const now = Date.now();
+  const startOfDay = (() => { const d = new Date(now); d.setHours(0,0,0,0); return d.getTime(); })();
+  const startOfWeek = startOfDay - 6 * DAY; // last 7 days
+  const startOfMonth = (() => { const d = new Date(now); d.setDate(1); d.setHours(0,0,0,0); return d.getTime(); })();
+  const startOfYear = (() => { const d = new Date(now); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.getTime(); })();
+
+  function bytesAggregate(since: number): { byMac: Map<string, { bd: number; bu: number }> } {
+    const { sql, params } = bytesSinceSql(since);
+    const rows = db().prepare(sql).all(...params) as Array<{ mac: string; bd: number; bu: number }>;
+    const map = new Map<string, { bd: number; bu: number }>();
+    for (const r of rows) map.set(r.mac, { bd: Number(r.bd ?? 0), bu: Number(r.bu ?? 0) });
+    return { byMac: map };
+  }
+  const today = bytesAggregate(startOfDay);
+  const week = bytesAggregate(startOfWeek);
+  const month = bytesAggregate(startOfMonth);
+  const year = bytesAggregate(startOfYear);
+  const all = bytesAggregate(0);
+
+  const devices = db().prepare(`
+    SELECT mac, COALESCE(custom_label, router_remark, hostname, mac) AS label, category, vendor
+    FROM devices ORDER BY last_seen DESC
+  `).all() as Array<{ mac: string; label: string; category: string | null; vendor: string | null }>;
+
+  return devices.map((d) => ({
+    mac: d.mac, label: d.label, category: d.category, vendor: d.vendor,
+    today_down: today.byMac.get(d.mac)?.bd ?? 0,
+    today_up: today.byMac.get(d.mac)?.bu ?? 0,
+    week_down: week.byMac.get(d.mac)?.bd ?? 0,
+    week_up: week.byMac.get(d.mac)?.bu ?? 0,
+    month_down: month.byMac.get(d.mac)?.bd ?? 0,
+    month_up: month.byMac.get(d.mac)?.bu ?? 0,
+    year_down: year.byMac.get(d.mac)?.bd ?? 0,
+    year_up: year.byMac.get(d.mac)?.bu ?? 0,
+    total_down: all.byMac.get(d.mac)?.bd ?? 0,
+    total_up: all.byMac.get(d.mac)?.bu ?? 0,
+  })).sort((a, b) => (b.total_down + b.total_up) - (a.total_down + a.total_up));
+}
+
+export function getRouterLog(limit = 500) {
+  return db().prepare(`
+    SELECT id, ts, severity, host, tag, message, src_ip FROM router_log
+    ORDER BY id DESC LIMIT ?
+  `).all(limit);
+}
+
+export interface AttackLogRow {
+  router_id: number; ts: number; log_type: number; message: string;
+  attacker_ip: string | null; attacker_mac: string | null;
+  attack_kind: string | null; attack_count: number | null;
+  device_label: string | null;
+}
+
+export function getAttackLog(opts: { limit?: number; logType?: number | null; mac?: string | null } = {}): AttackLogRow[] {
+  const limit = opts.limit ?? 500;
+  let where = '';
+  const params: any[] = [];
+  if (opts.logType !== undefined && opts.logType !== null) {
+    where += ' AND s.log_type = ?';
+    params.push(opts.logType);
+  }
+  if (opts.mac) {
+    where += ' AND s.attacker_mac = ?';
+    params.push(opts.mac.toUpperCase());
+  }
+  return db().prepare(`
+    SELECT s.router_id, s.ts, s.log_type, s.message, s.attacker_ip, s.attacker_mac,
+           s.attack_kind, s.attack_count,
+           COALESCE(d.custom_label, d.router_remark, d.hostname, s.attacker_mac) AS device_label
+    FROM router_syslog s
+    LEFT JOIN devices d ON d.mac = s.attacker_mac
+    WHERE 1=1 ${where}
+    ORDER BY s.ts DESC LIMIT ?
+  `).all(...params, limit) as AttackLogRow[];
+}
+
+export function getAttackStats() {
+  const conn = db();
+  const totals = conn.prepare(`
+    SELECT COUNT(*) AS total,
+           SUM(CASE WHEN log_type = 2 THEN 1 ELSE 0 END) AS attacks,
+           SUM(CASE WHEN log_type = 1 THEN 1 ELSE 0 END) AS system,
+           SUM(CASE WHEN log_type = 3 THEN 1 ELSE 0 END) AS quits
+    FROM router_syslog
+  `).get() as { total: number; attacks: number; system: number; quits: number };
+
+  const topAttackers = conn.prepare(`
+    SELECT attacker_mac AS mac, attacker_ip AS ip,
+           COALESCE(d.custom_label, d.router_remark, d.hostname, s.attacker_mac) AS label,
+           COUNT(*) AS event_count, SUM(attack_count) AS total_attacks,
+           MAX(ts) AS latest_ts, attack_kind
+    FROM router_syslog s
+    LEFT JOIN devices d ON d.mac = s.attacker_mac
+    WHERE log_type = 2 AND attacker_mac IS NOT NULL
+    GROUP BY attacker_mac, attack_kind
+    ORDER BY total_attacks DESC LIMIT 20
+  `).all() as Array<any>;
+
+  return { totals, topAttackers };
+}
+
+/**
+ * Per-device daily breakdown: returns last N days, each day's down/up per device.
+ * Used by /report page.
+ */
+export function getDailyReport(days = 30): {
+  days: number[];
+  devices: Array<{
+    mac: string; label: string; category: string | null; vendor: string | null;
+    daily: Array<{ day_ts: number; bytes_down: number; bytes_up: number }>;
+    total_down: number; total_up: number;
+  }>;
+} {
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const today = (() => { const d = new Date(now); d.setHours(0,0,0,0); return d.getTime(); })();
+  const dayTimestamps: number[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    dayTimestamps.push(today - i * dayMs);
+  }
+  const earliest = dayTimestamps[0];
+
+  // Aggregate per (mac, day) bytes from all granularity tables, then bucket-by-day in JS.
+  const rows = db().prepare(`
+    SELECT mac, bucket_ts AS ts, bytes_down AS bd, bytes_up AS bu FROM traffic_5min WHERE bucket_ts >= ?
+    UNION ALL
+    SELECT mac, bucket_ts, bytes_down, bytes_up FROM traffic_hour WHERE bucket_ts >= ?
+    UNION ALL
+    SELECT mac, bucket_ts, bytes_down, bytes_up FROM traffic_day WHERE bucket_ts >= ?
+    UNION ALL
+    SELECT mac, bucket_ts, bytes_down, bytes_up FROM traffic_month WHERE bucket_ts >= ?
+  `).all(earliest, earliest, earliest, earliest) as Array<{ mac: string; ts: number; bd: number; bu: number }>;
+
+  // bucket each row to its day
+  const map = new Map<string, Map<number, { bd: number; bu: number }>>();
+  for (const r of rows) {
+    const d = new Date(r.ts);
+    d.setHours(0,0,0,0);
+    const dayTs = d.getTime();
+    if (dayTs < earliest) continue;
+    let inner = map.get(r.mac);
+    if (!inner) { inner = new Map(); map.set(r.mac, inner); }
+    const e = inner.get(dayTs) ?? { bd: 0, bu: 0 };
+    e.bd += Number(r.bd ?? 0);
+    e.bu += Number(r.bu ?? 0);
+    inner.set(dayTs, e);
+  }
+
+  const devices = db().prepare(`
+    SELECT mac, COALESCE(custom_label, router_remark, hostname, mac) AS label, category, vendor
+    FROM devices ORDER BY last_seen DESC
+  `).all() as Array<{ mac: string; label: string; category: string | null; vendor: string | null }>;
+
+  const out = devices.map((d) => {
+    const inner = map.get(d.mac);
+    const daily = dayTimestamps.map((t) => {
+      const e = inner?.get(t);
+      return { day_ts: t, bytes_down: e?.bd ?? 0, bytes_up: e?.bu ?? 0 };
+    });
+    const total_down = daily.reduce((s, d) => s + d.bytes_down, 0);
+    const total_up = daily.reduce((s, d) => s + d.bytes_up, 0);
+    return { mac: d.mac, label: d.label, category: d.category, vendor: d.vendor, daily, total_down, total_up };
+  }).sort((a, b) => (b.total_down + b.total_up) - (a.total_down + a.total_up));
+
+  return { days: dayTimestamps, devices: out };
 }
 
 export function getRouterUptimeSeries(days = 30) {
@@ -433,6 +644,20 @@ export function getRouterUptimeSeries(days = 30) {
     SELECT ts, uptime_sec, is_reboot, online_count FROM router_state
     WHERE ts >= ? ORDER BY ts
   `).all(since);
+}
+
+export function getDeviceAttacks(mac: string) {
+  const conn = db();
+  const macUp = mac.toUpperCase();
+  const summary = conn.prepare(`
+    SELECT attack_kind, COUNT(*) AS events, SUM(attack_count) AS total, MAX(ts) AS latest
+    FROM router_syslog WHERE attacker_mac = ? AND log_type = 2 GROUP BY attack_kind
+  `).all(macUp);
+  const recent = conn.prepare(`
+    SELECT ts, attack_kind, attack_count, message
+    FROM router_syslog WHERE attacker_mac = ? AND log_type = 2 ORDER BY ts DESC LIMIT 30
+  `).all(macUp);
+  return { summary, recent };
 }
 
 export function getDeviceStats(mac: string) {

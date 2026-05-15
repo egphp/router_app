@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDevice, getDeviceStats, getDeviceTraffic, updateDevice, type Bucket } from '../../../../lib/queries';
+import { getDevice, getDeviceStats, getDeviceTraffic, updateDevice, getDeviceAttacks, type Bucket } from '../../../../lib/queries';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +15,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ mac: string }> 
   if (!device) return NextResponse.json({ error: 'device not found' }, { status: 404 });
   const traffic = getDeviceTraffic(macUp, range);
   const stats = getDeviceStats(macUp);
-  return NextResponse.json({ device, stats, range, traffic });
+  const attacks = getDeviceAttacks(macUp);
+  return NextResponse.json({ device, stats, range, traffic, attacks });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ mac: string }> }) {

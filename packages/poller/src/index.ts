@@ -5,6 +5,8 @@ import { RouterClient } from './router-client.js';
 import { Sampler } from './sampler.js';
 import { IpcBroadcaster } from './ipc.js';
 import { startControlServer } from './control-server.js';
+import { SyslogServer } from './syslog-server.js';
+import { TelegramNotifier } from './telegram-notifier.js';
 import { log } from './logger.js';
 
 function resolveRepoRoot(): string {
@@ -34,7 +36,14 @@ async function main() {
   const controlPort = Number(process.env.CONTROL_PORT ?? 3031);
   const controlServer = startControlServer(controlPort, router, resolveRepoRoot());
 
-  log.info('poller starting', { host: cfg.routerHost, intervalMs: cfg.pollIntervalMs, db: cfg.dbPath, controlPort });
+  const syslogPort = Number(process.env.SYSLOG_PORT ?? 514);
+  const syslog = new SyslogServer(db, syslogPort);
+  syslog.start();
+
+  const tg = new TelegramNotifier(db);
+  const tgTimer = setInterval(() => { tg.tick().catch((e) => log.warn('tg.tick error', String(e))); }, 60_000);
+
+  log.info('poller starting', { host: cfg.routerHost, intervalMs: cfg.pollIntervalMs, db: cfg.dbPath, controlPort, syslogPort });
   sampler.start();
 
   const shutdown = (sig: string) => {
@@ -42,6 +51,8 @@ async function main() {
     sampler.stop();
     ipc.close();
     controlServer.close();
+    syslog.stop();
+    clearInterval(tgTimer);
     process.exit(0);
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
