@@ -50,7 +50,7 @@ export function LiveSpeedChart() {
           <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400"></span>Upload</span>
         </div>
       </div>
-      <div className="h-48 sm:h-64">
+      <div className="h-32 sm:h-40">
         {errored ? (
           <div className="h-full flex items-center justify-center text-slate-500 text-sm">
             Could not load speed data. Will retry automatically.
