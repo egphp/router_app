@@ -65,32 +65,58 @@ for f in .env tenda.db tenda.db-shm tenda.db-wal; do
 done
 rm -rf "$TMPDIR"
 
-log "running pnpm install"
-if ! pnpm install --frozen-lockfile=false >>"$LOG" 2>&1; then
-  log "pnpm install failed"
-  exit 1
-fi
+# Detect what kind of changes the new commits brought. Docs-only updates can
+# skip pnpm install + build + service restart entirely — faster + zero downtime.
+CHANGED_FILES=$(git diff --name-only "$LOCAL" "$REMOTE" 2>/dev/null || echo "")
+NEEDS_BUILD=0
+NEEDS_RESTART=0
+for f in $CHANGED_FILES; do
+  case "$f" in
+    packages/*|apps/web/*|*.json|pnpm-lock.yaml) NEEDS_BUILD=1; NEEDS_RESTART=1 ;;
+    deploy/*.service|deploy/*.timer)             NEEDS_RESTART=1 ;;
+  esac
+done
 
-log "running pnpm build"
-if ! pnpm -r build >>"$LOG" 2>&1; then
-  log "pnpm build failed"
-  exit 1
+if [[ "$NEEDS_BUILD" == "1" ]]; then
+  log "running pnpm install"
+  if ! pnpm install --frozen-lockfile=false >>"$LOG" 2>&1; then
+    log "pnpm install failed"
+    exit 1
+  fi
+
+  log "running pnpm build"
+  if ! pnpm -r build >>"$LOG" 2>&1; then
+    log "pnpm build failed"
+    exit 1
+  fi
+else
+  log "docs-only update — skipping build + restart"
 fi
 
 NEW=$(git rev-parse HEAD)
-log "updated to $NEW; restarting services"
 
-# Reload + restart via user systemd (this script runs as the same user)
-systemctl --user daemon-reload || true
-# Reinstall service units in case they changed
-SYSTEMD_DIR="$HOME/.config/systemd/user"
-mkdir -p "$SYSTEMD_DIR"
-for svc in tenda-poller.service tenda-web.service tenda-auto-update.service tenda-auto-update.timer; do
-  if [[ -f "$APP_DIR/deploy/$svc" ]]; then
-    install -m 0644 "$APP_DIR/deploy/$svc" "$SYSTEMD_DIR/$svc"
-  fi
-done
-systemctl --user daemon-reload
-systemctl --user restart tenda-poller.service tenda-web.service
+if [[ "$NEEDS_RESTART" == "1" ]]; then
+  log "updated to $NEW; restarting services"
+
+  # Reload + reinstall service unit files in case they changed
+  SYSTEMD_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$SYSTEMD_DIR"
+  for svc in tenda-poller.service tenda-web.service tenda-auto-update.service tenda-auto-update.timer; do
+    if [[ -f "$APP_DIR/deploy/$svc" ]]; then
+      install -m 0644 "$APP_DIR/deploy/$svc" "$SYSTEMD_DIR/$svc"
+    fi
+  done
+  systemctl --user daemon-reload
+  # Staggered restart so the web is rarely down. Poller first; wait for it
+  # to come back up before bouncing the web.
+  systemctl --user restart tenda-poller.service
+  for i in 1 2 3 4 5 6; do
+    if systemctl --user is-active --quiet tenda-poller.service; then break; fi
+    sleep 1
+  done
+  systemctl --user restart tenda-web.service
+else
+  log "updated to $NEW (no restart needed)"
+fi
 
 log "update complete"
