@@ -6,6 +6,7 @@ import { RollupWorker } from './rollup.js';
 import { IpcBroadcaster } from './ipc.js';
 import { SecurityScanner } from './security.js';
 import { SystemLogPuller } from './system-log-puller.js';
+import { NsfwScanner } from './nsfw-scanner.js';
 import { parseRouterUptime, MIN } from '@tenda/shared';
 import { log } from './logger.js';
 
@@ -25,6 +26,7 @@ export class Sampler {
   private rollup: RollupWorker;
   private security: SecurityScanner;
   private logPuller: SystemLogPuller;
+  private nsfw: NsfwScanner;
   private telemetry: RouterTelemetry | null = null;
 
   private insertRouterState: Database.Statement;
@@ -40,6 +42,7 @@ export class Sampler {
     this.rollup = new RollupWorker(db);
     this.security = new SecurityScanner(db);
     this.logPuller = new SystemLogPuller(db, router);
+    this.nsfw = new NsfwScanner(db);
     this.insertRouterState = db.prepare(`
       INSERT OR REPLACE INTO router_state (ts, uptime_sec, is_reboot, online_count) VALUES (?, ?, ?, ?)
     `);
@@ -92,6 +95,9 @@ export class Sampler {
 
       const devices = await this.router.getDeviceList();
       const result = this.accumulator.process(now, devices, isReboot);
+
+      // NSFW URL detection (cheap; only scans new syslog rows since last tick).
+      this.nsfw.scan(now);
 
       // Security checks every cycle (with internal dedupe).
       const sec = this.security.scan(now, devices);

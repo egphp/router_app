@@ -7,6 +7,7 @@ import { LiveSpeedChart } from './LiveSpeedChart';
 import { DeviceTable } from './DeviceTable';
 import { AlertBanner } from './AlertBanner';
 import { UpdateBanner } from './UpdateBanner';
+import { NsfwBanner } from './NsfwBanner';
 import { TopTalkers } from './TopTalkers';
 import { CategoryBreakdown } from './CategoryBreakdown';
 import { ConcurrentChart } from './ConcurrentChart';
@@ -175,6 +176,7 @@ export function Dashboard() {
   return (
     <div className="space-y-4 sm:space-y-5">
       <UpdateBanner />
+      <NsfwBanner />
       <AlertBanner />
 
       {/* Edit toolbar */}

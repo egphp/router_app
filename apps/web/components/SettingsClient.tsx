@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
-import { Eye, EyeOff, Shield, CheckCircle2, AlertCircle, Save, Loader } from 'lucide-react';
+import { Eye, EyeOff, Shield, CheckCircle2, AlertCircle, Save, Loader, ShieldAlert } from 'lucide-react';
 
 interface Settings {
   routerHost: string;
@@ -111,6 +111,8 @@ export function SettingsClient() {
         </div>
       </div>
 
+      <NsfwToggle />
+
       <div className="card p-5 space-y-2 animate-fade-in">
         <h2 className="font-semibold mb-2">System</h2>
         <Row label="Daemon running" value={data?.daemon?.running ? '✓ yes' : '✗ no'} ok={data?.daemon?.running} />
@@ -133,6 +135,67 @@ function Row({ label, value, ok }: { label: string; value: string; ok?: boolean 
     <div className="grid grid-cols-3 gap-3 text-sm">
       <div className="text-slate-400">{label}</div>
       <div className={`col-span-2 font-mono break-all ${ok === true ? 'text-accent-green' : ok === false ? 'text-accent-red' : 'text-slate-100'}`}>{value}</div>
+    </div>
+  );
+}
+
+function NsfwToggle() {
+  const { data, mutate } = useSWR<{ enabled: boolean; last_24h: { hits: number; devices: number } }>(
+    '/api/nsfw', fetcher, { refreshInterval: 30000 },
+  );
+  const [busy, setBusy] = useState(false);
+
+  const toggle = async () => {
+    if (!data) return;
+    setBusy(true);
+    try {
+      await fetch('/api/nsfw', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !data.enabled }),
+      });
+      mutate();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card p-5 animate-fade-in">
+      <div className="flex items-center gap-2 mb-2">
+        <ShieldAlert size={16} className="text-accent-red" />
+        <h2 className="font-semibold">Adult-content detection</h2>
+      </div>
+      <p className="text-sm text-slate-400 mb-4">
+        Scans router syslog for visits to known adult / webcam / hentai / dating domains and surfaces a banner on the dashboard.
+        Built-in list covers ~250 hosts; runs entirely on this machine.
+      </p>
+      <div className="flex items-center justify-between gap-4 p-3 rounded-md bg-bg-elevated/40 border border-bg-border">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">
+            {data?.enabled ? 'Enabled' : 'Disabled'}
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            {data
+              ? data.last_24h.hits > 0
+                ? `Last 24h: ${data.last_24h.hits} hits across ${data.last_24h.devices} device${data.last_24h.devices === 1 ? '' : 's'}`
+                : 'No hits detected in the last 24 hours.'
+              : 'Loading…'}
+          </div>
+        </div>
+        <button
+          onClick={toggle}
+          disabled={!data || busy}
+          aria-pressed={data?.enabled}
+          className={`relative w-12 h-6 rounded-full transition shrink-0 ${
+            data?.enabled ? 'bg-accent-red' : 'bg-bg-border'
+          } disabled:opacity-50`}
+        >
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+            data?.enabled ? 'translate-x-6' : 'translate-x-0.5'
+          }`} />
+        </button>
+      </div>
     </div>
   );
 }
