@@ -7,11 +7,19 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-$HOME/router_app}"
 LOG="$APP_DIR/logs/auto-update.log"
+STATIC_TMPDIR=""
 
 mkdir -p "$APP_DIR/logs"
 exec >> "$LOG" 2>&1
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+cleanup_static_snapshot() {
+  if [[ -n "${STATIC_TMPDIR:-}" && -d "$STATIC_TMPDIR" ]]; then
+    rm -rf "$STATIC_TMPDIR"
+  fi
+}
+trap cleanup_static_snapshot EXIT
 
 cd "$APP_DIR"
 
@@ -65,6 +73,16 @@ for f in .env tenda.db tenda.db-shm tenda.db-wal; do
 done
 rm -rf "$TMPDIR"
 
+# Keep the previous Next.js static files around while building the new release.
+# Open browser tabs can still request old hashed chunks during the restart
+# window; preserving these files prevents transient ChunkLoadError/client-side
+# exception screens when an auto-update lands.
+if [[ -d "$APP_DIR/apps/web/.next/static" ]]; then
+  STATIC_TMPDIR=$(mktemp -d)
+  cp -a "$APP_DIR/apps/web/.next/static/." "$STATIC_TMPDIR/"
+  log "snapshot: apps/web/.next/static"
+fi
+
 # Detect what kind of changes the new commits brought. Docs-only updates can
 # skip pnpm install + build + service restart entirely — faster + zero downtime.
 CHANGED_FILES=$(git diff --name-only "$LOCAL" "$REMOTE" 2>/dev/null || echo "")
@@ -88,6 +106,12 @@ if [[ "$NEEDS_BUILD" == "1" ]]; then
   if ! pnpm -r build >>"$LOG" 2>&1; then
     log "pnpm build failed"
     exit 1
+  fi
+  if [[ -n "$STATIC_TMPDIR" && -d "$STATIC_TMPDIR" && -d "$APP_DIR/apps/web/.next/static" ]]; then
+    log "preserving previous Next static assets"
+    cp -an "$STATIC_TMPDIR/." "$APP_DIR/apps/web/.next/static/" || true
+    rm -rf "$STATIC_TMPDIR"
+    STATIC_TMPDIR=""
   fi
 else
   log "docs-only update — skipping build + restart"

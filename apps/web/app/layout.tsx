@@ -3,6 +3,7 @@ import { Fraunces, Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import { TopNav } from '../components/TopNav';
 import { PrivacyMask } from '../components/PrivacyMask';
+import { AutoReloadOnUpdate } from '../components/AutoReloadOnUpdate';
 
 const fontDisplay = Fraunces({
   subsets: ['latin'],
@@ -39,6 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${fontDisplay.variable} ${fontSans.variable} ${fontMono.variable}`}>
       <body className="min-h-screen">
         <PrivacyMask />
+        <AutoReloadOnUpdate />
         <TopNav />
         <main className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 xl:px-8 py-4 sm:py-5 lg:py-6">{children}</main>
       </body>
