@@ -40,11 +40,11 @@ Per-device fields (online):
 | `hostMAC` | string | **Use as primary identity key.** Stable across reboots. |
 | `hostName` | string | Router-reported name (e.g. `iPhone`, `Mac`, `espressif`) |
 | `hostRemark` | string | User-given label on router (e.g. `mac Studio`) |
-| `hostUploadSpeed` | int | B/s instantaneous |
-| `hostDownloadSpeed` | int | B/s instantaneous |
+| `hostUploadSpeed` | int | KB/s instantaneous in Tenda UI/API; app stores as bytes/s |
+| `hostDownloadSpeed` | int | KB/s instantaneous in Tenda UI/API; app stores as bytes/s |
 | `hostConnectCount` | int | Concurrent sessions |
 | `hostDownloadSum` | int | **KB** cumulative — resets on router reboot. Authoritative download counter. |
-| `hostConnectType` | int | 3=wifi, 4=ethernet (inferred) |
+| `hostConnectType` | int | 2=wired, 3=2.4GHz WiFi, 4=5GHz WiFi (verified from router UI code) |
 | `hostUploadLimit`, `hostDownloadLimit` | int | KB/s limits (0 = unlimited) |
 | `onlineTime` | int | seconds online since session start |
 | `hostOnlineStatus` | 0/1 | online flag |
@@ -153,8 +153,8 @@ CREATE TABLE samples_raw (
   ts             INTEGER NOT NULL,          -- ms epoch
   ip             TEXT,
   online         INTEGER NOT NULL,
-  up_speed_bps   INTEGER NOT NULL,          -- B/s
-  down_speed_bps INTEGER NOT NULL,          -- B/s
+  up_speed_bps   INTEGER NOT NULL,          -- bytes/s after converting Tenda KB/s
+  down_speed_bps INTEGER NOT NULL,          -- bytes/s after converting Tenda KB/s
   down_sum_kb    INTEGER NOT NULL,          -- raw router cumulative (KB)
   sessions       INTEGER,
   online_seconds INTEGER,
@@ -292,7 +292,7 @@ Built with Next.js 15 App Router, shadcn/ui, Tailwind, `recharts` for charts. Bi
   - Today's totals (↓ X GB, ↑ Y GB est).
   - Top device today (name, % share, total).
   - Active alerts (count by kind).
-- **Live speed chart** (last 60 min, 30 s tick) — area chart, download blue, upload orange, with WAN1/WAN2/All toggle.
+- **Live speed chart** (last 60 min, 1 s tick) — area chart, download blue, upload orange. Source stays router-reported WAN/device speed samples only; this W30E firmware can under-report burst speeds during external speed tests, so the value is router-observed rather than host-NIC measured.
 - **Device table** — 36 rows, virtualized; columns: status dot (online=green/offline=gray/new=red), name+vendor, IP, ↓ speed, ↑ speed, today total, all-time total, action menu.
 - Real-time updates over SSE (`/api/stream`).
 

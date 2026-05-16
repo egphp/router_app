@@ -3,6 +3,7 @@ import type { RouterDevice } from '@tenda/shared';
 import { bucket5Min } from '@tenda/shared';
 import { lookupOui, categorizeByName } from '@tenda/shared';
 import { log } from './logger.js';
+import { extractWifiMetrics } from './wifi-metrics.js';
 
 interface PrevSample {
   ts: number;
@@ -44,8 +45,14 @@ export class Accumulator {
     this.fetchDevice = db.prepare(`SELECT mac FROM devices WHERE mac = ?`);
 
     this.insertSample = db.prepare(`
-      INSERT OR REPLACE INTO samples_raw (mac, ts, ip, online, up_speed_bps, down_speed_bps, down_sum_kb, sessions, online_seconds)
-      VALUES (@mac, @ts, @ip, @online, @up_speed_bps, @down_speed_bps, @down_sum_kb, @sessions, @online_seconds)
+      INSERT OR REPLACE INTO samples_raw (
+        mac, ts, ip, online, up_speed_bps, down_speed_bps, down_sum_kb, sessions, online_seconds,
+        connect_type, connection_kind, wifi_band, wifi_rssi_dbm, wifi_signal_percent, wifi_distance_m, wifi_distance_source
+      )
+      VALUES (
+        @mac, @ts, @ip, @online, @up_speed_bps, @down_speed_bps, @down_sum_kb, @sessions, @online_seconds,
+        @connect_type, @connection_kind, @wifi_band, @wifi_rssi_dbm, @wifi_signal_percent, @wifi_distance_m, @wifi_distance_source
+      )
     `);
 
     this.lastSample = db.prepare(`
@@ -119,6 +126,7 @@ export class Accumulator {
         const rawDownSumKb = Number(dev.hostDownloadSum ?? 0);
         const sessions = isOnline ? Number((dev as any).hostConnectCount ?? 0) : 0;
         const onlineSec = isOnline ? Number((dev as any).onlineTime ?? 0) : 0;
+        const wifi = extractWifiMetrics(dev);
 
         const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
         const dtSec = prev ? Math.max(1, Math.round((now - prev.ts) / 1000)) : 30;
@@ -208,6 +216,13 @@ export class Accumulator {
           down_sum_kb: downSumKb,
           sessions,
           online_seconds: onlineSec,
+          connect_type: wifi.connectType,
+          connection_kind: wifi.connectionKind,
+          wifi_band: wifi.wifiBand,
+          wifi_rssi_dbm: wifi.wifiRssiDbm,
+          wifi_signal_percent: wifi.wifiSignalPercent,
+          wifi_distance_m: wifi.wifiDistanceM,
+          wifi_distance_source: wifi.wifiDistanceSource,
         });
 
         const bucket = bucket5Min(now);

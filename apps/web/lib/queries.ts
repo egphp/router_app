@@ -13,11 +13,19 @@ export interface DeviceRow {
   online: 0 | 1;
   up_speed_bps: number;
   down_speed_bps: number;
+  connect_type: number | null;
+  connection_kind: 'wired' | 'wifi' | 'unknown' | null;
+  wifi_band: '2.4GHz' | '5GHz' | 'wifi' | null;
+  wifi_rssi_dbm: number | null;
+  wifi_signal_percent: number | null;
+  wifi_distance_m: number | null;
+  wifi_distance_source: 'rssi-log-distance' | 'signal-percent-proxy' | null;
   bytes_today: number;
   bytes_up_today: number;
   bytes_total: number;
   bytes_up_total: number;
   is_new: 0 | 1;
+  last_online_at: number | null;
   last_seen: number;
   first_seen: number;
 }
@@ -50,11 +58,20 @@ export function getLatestDevices(): DeviceRow[] {
     WITH latest AS (
       SELECT mac, MAX(ts) AS ts FROM samples_raw GROUP BY mac
     ),
+    last_online AS (
+      SELECT mac, MAX(ts) AS last_online_at
+      FROM samples_raw
+      WHERE online = 1
+      GROUP BY mac
+    ),
     today AS (${todayBytes.sql}),
     alltime AS (${allBytes.sql})
     SELECT d.mac, d.hostname, d.router_remark, d.custom_label, d.vendor, d.category,
            d.is_new, d.last_seen, d.first_seen,
+           lo.last_online_at,
            s.ip, s.online, s.up_speed_bps, s.down_speed_bps,
+           s.connect_type, s.connection_kind, s.wifi_band, s.wifi_rssi_dbm, s.wifi_signal_percent,
+           s.wifi_distance_m, s.wifi_distance_source,
            COALESCE(td.bd, 0) AS bytes_today,
            COALESCE(td.bu, 0) AS bytes_up_today,
            COALESCE(at.bd, 0) AS bytes_total,
@@ -62,6 +79,7 @@ export function getLatestDevices(): DeviceRow[] {
     FROM devices d
     LEFT JOIN latest l ON l.mac = d.mac
     LEFT JOIN samples_raw s ON s.mac = d.mac AND s.ts = l.ts
+    LEFT JOIN last_online lo ON lo.mac = d.mac
     LEFT JOIN today td ON td.mac = d.mac
     LEFT JOIN alltime at ON at.mac = d.mac
     ORDER BY bytes_today DESC, d.last_seen DESC
@@ -69,8 +87,16 @@ export function getLatestDevices(): DeviceRow[] {
   return rows.map((r) => ({
     ...r,
     online: (r.online ?? 0) as 0 | 1,
+    last_online_at: r.last_online_at === null || r.last_online_at === undefined ? null : Number(r.last_online_at),
     up_speed_bps: r.up_speed_bps ?? 0,
     down_speed_bps: r.down_speed_bps ?? 0,
+    connect_type: r.connect_type ?? null,
+    connection_kind: r.connection_kind ?? null,
+    wifi_band: r.wifi_band ?? null,
+    wifi_rssi_dbm: r.wifi_rssi_dbm === null || r.wifi_rssi_dbm === undefined ? null : Number(r.wifi_rssi_dbm),
+    wifi_signal_percent: r.wifi_signal_percent === null || r.wifi_signal_percent === undefined ? null : Number(r.wifi_signal_percent),
+    wifi_distance_m: r.wifi_distance_m === null || r.wifi_distance_m === undefined ? null : Number(r.wifi_distance_m),
+    wifi_distance_source: r.wifi_distance_source ?? null,
     bytes_today: Number(r.bytes_today ?? 0),
     bytes_up_today: Number(r.bytes_up_today ?? 0),
     bytes_total: Number(r.bytes_total ?? 0),
@@ -163,7 +189,7 @@ export interface LiveSpeedPoint { ts: number; down_bps: number; up_bps: number }
 
 export interface LiveSpeedSeries {
   speeds: LiveSpeedPoint[];
-  source: 'router-best' | 'wan' | 'devices';
+  source: 'router-best' | 'router-direct' | 'wan' | 'devices';
   latest_ts: number | null;
 }
 
@@ -322,6 +348,38 @@ export function getDeviceTraffic(mac: string, range: Bucket): BucketPoint[] {
   }
 }
 
+export function getDeviceTrafficForDay(mac: string, dayStart: number): BucketPoint[] {
+  const dayEnd = dayStart + DAY;
+  const now = Date.now();
+  const startOfHour = (() => { const d = new Date(now); d.setMinutes(0, 0, 0); return d.getTime(); })();
+  const parts: string[] = [];
+  const params: unknown[] = [];
+
+  const completedHourEnd = Math.min(dayEnd, startOfHour);
+  if (completedHourEnd > dayStart) {
+    parts.push(`
+      SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
+      FROM traffic_hour
+      WHERE mac = ? AND bucket_ts >= ? AND bucket_ts < ?
+    `);
+    params.push(mac, dayStart, completedHourEnd);
+  }
+
+  const liveStart = Math.max(dayStart, startOfHour);
+  if (dayEnd > liveStart && now >= liveStart) {
+    parts.push(`
+      SELECT bucket_ts, bytes_down, bytes_up, peak_down_bps, peak_up_bps
+      FROM traffic_5min
+      WHERE mac = ? AND bucket_ts >= ? AND bucket_ts < ?
+    `);
+    params.push(mac, liveStart, dayEnd);
+  }
+
+  if (parts.length === 0) return [];
+  const rows = db().prepare(parts.join(' UNION ALL ')).all(...params) as BucketPoint[];
+  return aggregateRows(rows, bucketHour);
+}
+
 function bucketLocalDay(ts: number): number {
   const d = new Date(ts);
   d.setHours(0, 0, 0, 0);
@@ -385,9 +443,21 @@ export function updateDevice(mac: string, fields: { custom_label?: string | null
 export function getDevice(mac: string) {
   return db().prepare(`
     SELECT d.*,
-           (SELECT ip FROM samples_raw WHERE mac = d.mac ORDER BY ts DESC LIMIT 1) AS ip
-    FROM devices d WHERE d.mac = ?
-  `).get(mac);
+           (SELECT MAX(ts) FROM samples_raw sr_online WHERE sr_online.mac = d.mac AND sr_online.online = 1) AS last_online_at,
+           s.ip, s.online, s.connect_type, s.connection_kind, s.wifi_band, s.wifi_rssi_dbm,
+           s.wifi_signal_percent, s.wifi_distance_m, s.wifi_distance_source,
+           COALESCE(s.up_speed_bps, 0) AS up_speed_bps,
+           COALESCE(s.down_speed_bps, 0) AS down_speed_bps
+    FROM devices d
+    LEFT JOIN (
+      SELECT *
+      FROM samples_raw
+      WHERE mac = ?
+      ORDER BY ts DESC
+      LIMIT 1
+    ) s ON s.mac = d.mac
+    WHERE d.mac = ?
+  `).get(mac, mac);
 }
 
 /** Per-hour-of-week heatmap: 24h × 7d grid (avg bytes/sec). */

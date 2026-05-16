@@ -10,6 +10,6 @@ export default async function DeviceDetailPage({ params }: { params: Promise<{ m
   const device = getDevice(macUp);
   if (!device) notFound();
   const stats = getDeviceStats(macUp);
-  const dailyUsage = getDeviceDailyUsage(macUp, 30);
+  const dailyUsage = getDeviceDailyUsage(macUp, 365);
   return <DeviceDetailClient device={device as any} initialStats={stats} dailyUsage={dailyUsage} />;
 }

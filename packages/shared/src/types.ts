@@ -8,6 +8,7 @@ export interface RouterDeviceOnline {
   hostDownloadSpeed: number;
   hostConnectCount: number;
   hostDownloadSum: number;
+  /** Tenda W30E: 2=wired, 3=2.4GHz WiFi, 4=5GHz WiFi. */
   hostConnectType: number;
   hostUploadLimit: number;
   hostDownloadLimit: number;
@@ -64,6 +65,13 @@ export interface SampleRaw {
   down_sum_kb: number;
   sessions: number | null;
   online_seconds: number | null;
+  connect_type: number | null;
+  connection_kind: 'wired' | 'wifi' | 'unknown' | null;
+  wifi_band: '2.4GHz' | '5GHz' | 'wifi' | null;
+  wifi_rssi_dbm: number | null;
+  wifi_signal_percent: number | null;
+  wifi_distance_m: number | null;
+  wifi_distance_source: 'rssi-log-distance' | 'signal-percent-proxy' | null;
 }
 
 export interface TrafficBucket {

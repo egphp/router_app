@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { Accumulator } from '../src/accumulator.js';
+import { estimateWifiDistanceMeters, extractWifiMetrics } from '../src/wifi-metrics.js';
 
 function makeDb(): Database.Database {
   const db = new Database(':memory:');
@@ -15,6 +16,8 @@ function makeDb(): Database.Database {
       is_new INTEGER NOT NULL DEFAULT 1, notes TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE samples_raw (mac TEXT, ts INTEGER, ip TEXT, online INTEGER, up_speed_bps INTEGER,
       down_speed_bps INTEGER, down_sum_kb INTEGER, sessions INTEGER, online_seconds INTEGER,
+      connect_type INTEGER, connection_kind TEXT, wifi_band TEXT, wifi_rssi_dbm REAL,
+      wifi_signal_percent REAL, wifi_distance_m REAL, wifi_distance_source TEXT,
       PRIMARY KEY (mac, ts));
     CREATE TABLE traffic_5min (mac TEXT, bucket_ts INTEGER, bytes_down INTEGER DEFAULT 0,
       bytes_up INTEGER DEFAULT 0, avg_down_bps INTEGER, avg_up_bps INTEGER, peak_down_bps INTEGER,
@@ -45,6 +48,43 @@ test('first sample for a device contributes 0 bytes (baseline)', () => {
   const r = acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_000 })], false);
   assert.equal(r.totalBytesDownDelta, 0, 'first sample = no delta');
   assert.equal(r.newDevices.length, 1);
+});
+
+test('wifi metrics classify Tenda connection types and estimate RSSI distance', () => {
+  const metrics = extractWifiMetrics({
+    ...device('AA:BB:CC:00:00:01', { sumKb: 0 }),
+    hostConnectType: 3,
+    rssi: -67,
+  } as any);
+
+  assert.equal(metrics.connectionKind, 'wifi');
+  assert.equal(metrics.wifiBand, '2.4GHz');
+  assert.equal(metrics.wifiRssiDbm, -67);
+  assert.equal(metrics.wifiDistanceM, estimateWifiDistanceMeters(-67, '2.4GHz'));
+  assert.equal(metrics.wifiDistanceSource, 'rssi-log-distance');
+});
+
+test('accumulator persists WiFi metadata with samples', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [{
+    ...device('AA:BB:CC:00:00:01', { sumKb: 0 }),
+    hostConnectType: 4,
+    hostRSSI: '64 dBm',
+  } as any], false);
+
+  const row = db.prepare(`
+    SELECT connect_type, connection_kind, wifi_band, wifi_rssi_dbm, wifi_distance_m, wifi_distance_source
+    FROM samples_raw
+    WHERE mac = 'AA:BB:CC:00:00:01'
+  `).get() as any;
+
+  assert.equal(row.connect_type, 4);
+  assert.equal(row.connection_kind, 'wifi');
+  assert.equal(row.wifi_band, '5GHz');
+  assert.equal(row.wifi_rssi_dbm, -64);
+  assert.equal(row.wifi_distance_m, estimateWifiDistanceMeters(-64, '5GHz'));
+  assert.equal(row.wifi_distance_source, 'rssi-log-distance');
 });
 
 test('subsequent samples produce delta = (new - old) * 1024', () => {

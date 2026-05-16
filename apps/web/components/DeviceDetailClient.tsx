@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 import { fetcher } from '../lib/fetcher';
-import { formatBps, formatBytes, formatMacShort, categoryIcon, formatDuration } from '../lib/format';
+import { formatBps, formatBytes, formatMacShort, categoryIcon, formatDuration, timeAgo } from '../lib/format';
 
 type Range = 'hour' | 'today' | 'week' | 'month' | 'year' | 'all';
 
@@ -24,8 +24,12 @@ interface Device {
   custom_label: string | null;
   vendor: string | null;
   category: string | null;
+  online: 0 | 1 | null;
+  up_speed_bps?: number;
+  down_speed_bps?: number;
   is_new: 0 | 1;
   first_seen: number;
+  last_online_at: number | null;
   last_seen: number;
   notes: string | null;
 }
@@ -38,29 +42,46 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
   dailyUsage: DailyRow[];
 }) {
   const [range, setRange] = useState<Range>('today');
+  const [selectedTrafficDay, setSelectedTrafficDay] = useState('');
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(device.custom_label ?? '');
   const [category, setCategory] = useState(device.category ?? '');
   const [notes, setNotes] = useState(device.notes ?? '');
+  const detailUrl = `/api/devices/${encodeURIComponent(device.mac)}?range=${range}&live=1${selectedTrafficDay ? `&day=${selectedTrafficDay}` : ''}`;
 
   const { data, mutate } = useSWR<{
     device: Device;
     stats: typeof initialStats;
     traffic: Array<{ bucket_ts: number; bytes_down: number; bytes_up: number; peak_down_bps?: number; peak_up_bps?: number }>;
     attacks: { summary: Array<{ attack_kind: string; events: number; total: number; latest: number }>; recent: Array<{ ts: number; attack_kind: string; attack_count: number; message: string }> };
-  }>(`/api/devices/${encodeURIComponent(device.mac)}?range=${range}`, fetcher, { refreshInterval: 15000 });
+    dailyUsage: DailyRow[];
+  }>(detailUrl, fetcher, {
+    refreshInterval: 2000,
+    refreshWhenHidden: false,
+    refreshWhenOffline: false,
+    keepPreviousData: true,
+  });
 
   const stats = data?.stats ?? initialStats;
   const traffic = data?.traffic ?? [];
   const attacks = data?.attacks;
+  const currentDevice = data?.device ?? device;
+  const dailyRows = data?.dailyUsage ?? dailyUsage;
+  const chartRange = selectedTrafficDay ? 'today' : range;
 
   const chartData = useMemo(() => traffic.map((p) => ({
-    t: formatBucket(p.bucket_ts, range),
+    t: formatBucket(p.bucket_ts, chartRange),
     down: p.bytes_down,
     up: p.bytes_up,
     peak_down: p.peak_down_bps ?? 0,
     peak_up: p.peak_up_bps ?? 0,
-  })), [traffic, range]);
+  })), [traffic, chartRange]);
+
+  const trafficTotals = useMemo(() => traffic.reduce((acc, p) => {
+    acc.down += Number(p.bytes_down ?? 0);
+    acc.up += Number(p.bytes_up ?? 0);
+    return acc;
+  }, { down: 0, up: 0 }), [traffic]);
 
   const save = async () => {
     await fetch(`/api/devices/${encodeURIComponent(device.mac)}`, {
@@ -76,39 +97,49 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
     mutate();
   };
 
-  const displayName = device.custom_label || device.router_remark || device.hostname || device.mac;
+  const displayName = currentDevice.custom_label || currentDevice.router_remark || currentDevice.hostname || currentDevice.mac;
 
   return (
     <div className="space-y-5">
       <div className="card p-4 sm:p-5 animate-fade-in">
         <div className="flex items-start gap-3 sm:gap-4">
-          <div className="text-3xl sm:text-4xl shrink-0">{categoryIcon(device.category)}</div>
+          <div className="text-3xl sm:text-4xl shrink-0">{categoryIcon(currentDevice.category)}</div>
           <div className="flex-1 min-w-0">
             {!editing ? (
               <>
                 <h1 className="text-lg sm:text-2xl font-bold flex items-center gap-2 sm:gap-3 flex-wrap">
                   {displayName}
-                  {device.is_new === 1 && (
+                  {currentDevice.is_new === 1 && (
                     <span className="text-[10px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold">NEW</span>
                   )}
                 </h1>
                 <div className="text-sm text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span>{device.vendor || 'Unknown vendor'}</span>
+                  <span>{currentDevice.vendor || 'Unknown vendor'}</span>
                   <span className="text-slate-600">·</span>
-                  {device.ip && (
+                  {currentDevice.ip && (
                     <>
-                      <span className="font-mono text-slate-300">{device.ip}</span>
+                      <span className="font-mono text-slate-300">{currentDevice.ip}</span>
                       <span className="text-slate-600">·</span>
                     </>
                   )}
-                  <span className="font-mono">{device.mac}</span>
+                  <span className="font-mono">{currentDevice.mac}</span>
                   <span className="text-slate-600">·</span>
-                  <span>category: <span className="text-slate-300">{device.category ?? 'unknown'}</span></span>
+                  <span>category: <span className="text-slate-300">{currentDevice.category ?? 'unknown'}</span></span>
                 </div>
                 <div className="text-xs text-slate-500 mt-1">
-                  first seen {new Date(device.first_seen).toLocaleString()} · last seen {new Date(device.last_seen).toLocaleString()}
+                  first seen {new Date(currentDevice.first_seen).toLocaleString()} · last sample {new Date(currentDevice.last_seen).toLocaleString()}
                 </div>
-                {device.notes && <div className="text-sm mt-2 text-slate-300 whitespace-pre-line">{device.notes}</div>}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className={`px-2 py-1 rounded border ${currentDevice.online === 1 ? 'bg-accent-green/10 text-accent-green border-accent-green/30' : 'bg-slate-800/60 text-slate-400 border-bg-border'}`}>
+                    {lastOnlineLabel(currentDevice)}
+                  </span>
+                  {currentDevice.last_online_at && (
+                    <span className="text-slate-500">
+                      last online at {new Date(currentDevice.last_online_at).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+                {currentDevice.notes && <div className="text-sm mt-2 text-slate-300 whitespace-pre-line">{currentDevice.notes}</div>}
               </>
             ) : (
               <div className="space-y-2">
@@ -151,7 +182,9 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-7 gap-2 sm:gap-3">
+        <Mini label="Live ↓" value={formatBps(currentDevice.down_speed_bps ?? 0)} />
+        <Mini label="Live ↑" value={formatBps(currentDevice.up_speed_bps ?? 0)} />
         <Mini
           label="All-time total"
           value={formatBytes(stats.bytes_down + stats.bytes_up)}
@@ -164,18 +197,46 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
       </div>
 
       <div className="card p-5">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
           <div>
             <div className="stat-label">Traffic by bucket</div>
-            <div className="text-xs text-slate-500 mt-1">{RANGES.find((r) => r.value === range)?.label}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {selectedTrafficDay ? `Selected day · ${dateLabelFromInput(selectedTrafficDay)}` : RANGES.find((r) => r.value === range)?.label}
+            </div>
           </div>
           <div className="flex bg-bg-elevated border border-bg-border rounded-md overflow-x-auto text-xs scrollbar-thin max-w-full">
             {RANGES.map((r) => (
-              <button key={r.value} onClick={() => setRange(r.value)}
+              <button key={r.value} onClick={() => { setSelectedTrafficDay(''); setRange(r.value); }}
                 className={`px-2 sm:px-3 py-1.5 transition whitespace-nowrap shrink-0 ${range === r.value ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-100'}`}>
                 {r.label}
               </button>
             ))}
+          </div>
+        </div>
+        <div className="mb-4 grid gap-2 lg:grid-cols-[minmax(220px,320px)_1fr]">
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={selectedTrafficDay}
+              onChange={(e) => setSelectedTrafficDay(e.target.value)}
+              onInput={(e) => setSelectedTrafficDay(e.currentTarget.value)}
+              max={dateInputValue(Date.now())}
+              className="bg-bg-elevated border border-bg-border rounded-md px-3 py-2 text-sm w-full focus:outline-none focus:border-accent"
+              aria-label="Find bucket traffic by day"
+            />
+            {selectedTrafficDay && (
+              <button
+                onClick={() => setSelectedTrafficDay('')}
+                className="text-xs px-3 py-2 rounded bg-bg-elevated border border-bg-border text-slate-300 hover:bg-bg-border"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <DayMetric label="↓ Down" value={formatBytes(trafficTotals.down)} tone="down" />
+            <DayMetric label="↑ Up" value={formatBytes(trafficTotals.up)} tone="up" />
+            <DayMetric label="Total" value={formatBytes(trafficTotals.down + trafficTotals.up)} tone="total" />
           </div>
         </div>
         <div className="h-64">
@@ -243,21 +304,55 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
         </div>
       </div>
 
-      <DailyComparison rows={dailyUsage} />
+      <DailyComparison rows={dailyRows} />
     </div>
   );
 }
 
 function DailyComparison({ rows }: { rows: DailyRow[] }) {
+  const [selectedDay, setSelectedDay] = useState('');
+  const rowsByDay = useMemo(() => {
+    const map = new Map<string, DailyRow>();
+    for (const row of rows) map.set(dateInputValue(row.day_ts), row);
+    return map;
+  }, [rows]);
+  const selectedRow = selectedDay ? rowsByDay.get(selectedDay) ?? null : null;
+  const visibleRows = selectedDay ? (selectedRow ? [selectedRow] : []) : rows;
   const max = Math.max(1, ...rows.map((r) => r.total));
   return (
     <div className="card p-5">
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div className="stat-label">Day-by-day comparison</div>
-        <div className="text-xs text-slate-500">{rows.length} days · click row to compare</div>
+        <div className="text-xs text-slate-500">{rows.length} days</div>
       </div>
-      {rows.length === 0 ? (
-        <div className="text-sm text-slate-500 py-4">No daily data yet.</div>
+      <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,320px)_1fr]">
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={selectedDay}
+            onChange={(e) => setSelectedDay(e.target.value)}
+            onInput={(e) => setSelectedDay(e.currentTarget.value)}
+            max={dateInputValue(Date.now())}
+            className="bg-bg-elevated border border-bg-border rounded-md px-3 py-2 text-sm w-full focus:outline-none focus:border-accent"
+            aria-label="Find traffic by day"
+          />
+          {selectedDay && (
+            <button
+              onClick={() => setSelectedDay('')}
+              className="text-xs px-3 py-2 rounded bg-bg-elevated border border-bg-border text-slate-300 hover:bg-bg-border"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <DayMetric label="↓ Down" value={selectedRow ? formatBytes(selectedRow.bytes_down) : selectedDay ? '0 B' : 'choose day'} tone="down" />
+          <DayMetric label="↑ Up" value={selectedRow ? formatBytes(selectedRow.bytes_up) : selectedDay ? '0 B' : 'choose day'} tone="up" />
+          <DayMetric label="Total" value={selectedRow ? formatBytes(selectedRow.total) : selectedDay ? '0 B' : 'choose day'} tone="total" />
+        </div>
+      </div>
+      {visibleRows.length === 0 ? (
+        <div className="text-sm text-slate-500 py-4">{selectedDay ? 'No traffic recorded for this day.' : 'No daily data yet.'}</div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -272,17 +367,20 @@ function DailyComparison({ rows }: { rows: DailyRow[] }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
-                const prev = rows[i + 1];
+              {visibleRows.map((r) => {
+                const sourceIndex = rows.findIndex((row) => row.day_ts === r.day_ts);
+                const prev = sourceIndex >= 0 ? rows[sourceIndex + 1] : undefined;
                 const delta = prev ? r.total - prev.total : null;
                 const pct = prev && prev.total > 0 ? Math.round(((r.total - prev.total) / prev.total) * 100) : null;
-                const isToday = i === 0;
+                const isToday = dateInputValue(r.day_ts) === dateInputValue(Date.now());
+                const isSelected = selectedDay === dateInputValue(r.day_ts);
                 const barPct = Math.round((r.total / max) * 100);
                 return (
-                  <tr key={r.day_ts} className={`border-t border-bg-border ${isToday ? 'bg-accent/5' : ''}`}>
+                  <tr key={r.day_ts} className={`border-t border-bg-border ${isToday ? 'bg-accent/5' : ''} ${isSelected ? 'outline outline-1 outline-accent/40' : ''}`}>
                     <td className="px-2 py-2.5 whitespace-nowrap">
-                      <div className={isToday ? 'font-semibold text-slate-100' : 'text-slate-300'}>{r.day_label}</div>
+                      <div className={isToday || isSelected ? 'font-semibold text-slate-100' : 'text-slate-300'}>{r.day_label}</div>
                       {isToday && <div className="text-[10px] text-accent">today</div>}
+                      {isSelected && !isToday && <div className="text-[10px] text-accent">selected</div>}
                     </td>
                     <td className="px-2 py-2.5 text-right tabular-nums text-blue-400">{formatBytes(r.bytes_down)}</td>
                     <td className="px-2 py-2.5 text-right tabular-nums text-orange-400">{formatBytes(r.bytes_up)}</td>
@@ -310,6 +408,16 @@ function DailyComparison({ rows }: { rows: DailyRow[] }) {
   );
 }
 
+function DayMetric({ label, value, tone }: { label: string; value: string; tone: 'down' | 'up' | 'total' }) {
+  const valueClass = tone === 'down' ? 'text-blue-400' : tone === 'up' ? 'text-orange-400' : 'text-slate-100';
+  return (
+    <div className="rounded-md border border-bg-border bg-bg-elevated/70 px-3 py-2 min-w-0">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`mt-0.5 font-semibold tabular-nums truncate ${valueClass}`}>{value}</div>
+    </div>
+  );
+}
+
 function Mini({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="card p-4">
@@ -333,4 +441,28 @@ function formatBucket(ts: number, range: Range): string {
     case 'all':
       return d.toLocaleDateString([], { year: '2-digit', month: 'short' });
   }
+}
+
+function lastOnlineLabel(device: Pick<Device, 'online' | 'last_online_at'>): string {
+  if (device.online === 1) return 'online now';
+  return device.last_online_at ? `last online ${timeAgo(device.last_online_at)}` : 'never seen online';
+}
+
+function dateInputValue(ts: number): string {
+  const d = new Date(ts);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function dateLabelFromInput(value: string): string {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return new Date(year, month - 1, day).toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }

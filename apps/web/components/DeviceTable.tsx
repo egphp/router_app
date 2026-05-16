@@ -24,6 +24,7 @@ interface DeviceRow {
   bytes_total: number;
   bytes_up_total: number;
   is_new: 0 | 1;
+  last_online_at: number | null;
   last_seen: number;
   first_seen: number;
 }
@@ -32,7 +33,12 @@ type SortKey = 'name' | 'down' | 'up' | 'today' | 'total' | 'last_seen';
 type Filter = 'all' | 'online' | 'offline' | 'new';
 
 export function DeviceTable() {
-  const { data, mutate } = useSWR<{ devices: DeviceRow[] }>('/api/devices', fetcher, { refreshInterval: 10000 });
+  const { data, mutate } = useSWR<{ devices: DeviceRow[] }>('/api/devices?live=1', fetcher, {
+    refreshInterval: 2000,
+    refreshWhenHidden: false,
+    refreshWhenOffline: false,
+    keepPreviousData: true,
+  });
   const { sort, onSort, setSort, indicator } = useTableSort<SortKey>(
     'tenda.devices.sort', { key: 'today', dir: 'desc' }
   );
@@ -60,7 +66,7 @@ export function DeviceTable() {
         case 'up': return sortNum(a.up_speed_bps, b.up_speed_bps, dir);
         case 'today': return sortNum(a.bytes_today + a.bytes_up_today, b.bytes_today + b.bytes_up_today, dir);
         case 'total': return sortNum(a.bytes_total + a.bytes_up_total, b.bytes_total + b.bytes_up_total, dir);
-        case 'last_seen': return sortNum(a.last_seen, b.last_seen, dir);
+        case 'last_seen': return sortNum(lastOnlineSortValue(a), lastOnlineSortValue(b), dir);
       }
     });
     return list;
@@ -133,8 +139,8 @@ export function DeviceTable() {
           <option value="up:asc">Sort: ↑ now (min)</option>
           <option value="name:asc">Sort: name A→Z</option>
           <option value="name:desc">Sort: name Z→A</option>
-          <option value="last_seen:desc">Sort: last seen ↓</option>
-          <option value="last_seen:asc">Sort: last seen ↑</option>
+          <option value="last_seen:desc">Sort: last online ↓</option>
+          <option value="last_seen:asc">Sort: last online ↑</option>
         </select>
       </div>
       {/* Mobile card list (< lg) */}
@@ -174,7 +180,7 @@ export function DeviceTable() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3 mt-2">
-                  <span className="text-[10px] text-slate-500">{timeAgo(d.last_seen)}</span>
+                  <span className="text-[10px] text-slate-500">{lastOnlineLabel(d)}</span>
                   {d.is_new === 1 && (
                     <button onClick={() => dismissNew(d.mac)}
                       className="ml-auto text-[10px] px-2 py-1 rounded bg-accent-green/10 text-accent-green border border-accent-green/30">
@@ -205,7 +211,7 @@ export function DeviceTable() {
               />
               <Th label="Today" active={sort.key === 'today'} indicator={indicator('today')} onClick={() => onSort('today', 'desc')} />
               <Th label="All-time" active={sort.key === 'total'} indicator={indicator('total')} onClick={() => onSort('total', 'desc')} />
-              <Th label="Last seen" active={sort.key === 'last_seen'} indicator={indicator('last_seen')} onClick={() => onSort('last_seen', 'desc')} />
+              <Th label="Last online" active={sort.key === 'last_seen'} indicator={indicator('last_seen')} onClick={() => onSort('last_seen', 'desc')} />
               <th style={{ padding: '12px 16px' }}></th>
             </tr>
           </thead>
@@ -253,7 +259,12 @@ export function DeviceTable() {
                     <div className="text-[10px] text-slate-500 font-normal">↓ {formatBytes(d.bytes_total, 0)} · ↑ {formatBytes(d.bytes_up_total, 0)}</div>
                   </div>
                 </td>
-                <td className={clsx('px-4 py-2.5 text-right text-xs text-slate-500', sort.key === 'last_seen' && 'col-sorted')}>{timeAgo(d.last_seen)}</td>
+                <td className={clsx('px-4 py-2.5 text-right text-xs', sort.key === 'last_seen' && 'col-sorted')}>
+                  <div className={d.online ? 'text-accent-green' : 'text-slate-400'}>{lastOnlineLabel(d)}</div>
+                  {d.last_online_at && (
+                    <div className="text-[10px] text-slate-600">{new Date(d.last_online_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                  )}
+                </td>
                 <td className="px-4 py-2.5 text-right">
                   {d.is_new === 1 && (
                     <button onClick={() => dismissNew(d.mac)}
@@ -276,6 +287,16 @@ export function DeviceTable() {
 
 function label(d: { custom_label: string | null; hostname: string | null; router_remark: string | null; mac: string }): string {
   return d.custom_label || d.router_remark || d.hostname || d.mac;
+}
+
+function lastOnlineLabel(d: { online: 0 | 1; last_online_at: number | null }): string {
+  if (d.online === 1) return 'online now';
+  return d.last_online_at ? timeAgo(d.last_online_at) : 'never online';
+}
+
+function lastOnlineSortValue(d: { online: 0 | 1; last_online_at: number | null }): number {
+  if (d.online === 1) return Date.now();
+  return d.last_online_at ?? 0;
 }
 
 function Th({ label, active, indicator, onClick, align = 'right', hint }: {

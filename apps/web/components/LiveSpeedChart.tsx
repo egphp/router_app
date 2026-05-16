@@ -8,14 +8,14 @@ import { formatBps } from '../lib/format';
 interface SpeedPoint { ts: number; down_bps: number; up_bps: number }
 interface LiveSpeedResponse {
   speeds: SpeedPoint[];
-  source?: 'router-best' | 'wan' | 'devices';
+  source?: 'router-best' | 'router-direct' | 'wan' | 'devices';
   latest_ts?: number | null;
 }
 
 export function LiveSpeedChart() {
   const lastGood = useRef<SpeedPoint[]>([]);
   const { data, error } = useSWR<LiveSpeedResponse>('/api/live?minutes=60', fetcher, {
-    refreshInterval: 5000,
+    refreshInterval: 1000,
     keepPreviousData: true,
     revalidateOnFocus: false,
     shouldRetryOnError: true,
@@ -37,7 +37,9 @@ export function LiveSpeedChart() {
 
   const latest = speeds[speeds.length - 1] ?? null;
   const latestAgeSec = latest ? Math.max(0, Math.round((Date.now() - latest.ts) / 1000)) : null;
-  const sourceLabel = data?.source === 'devices'
+  const sourceLabel = data?.source === 'router-direct'
+    ? 'Router live'
+    : data?.source === 'devices'
     ? 'Devices'
     : data?.source === 'wan'
       ? 'WAN'

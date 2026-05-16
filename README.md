@@ -89,7 +89,7 @@ order — the order is persisted in `localStorage` and survives reloads.
 
 | Status cards | Live speed |
 |---|---|
-| Per-card glow + gradient text scaled to the metric tone (green / red / amber / purple). | 60-minute area chart auto-refreshing every 10 s, with kept-previous-data so transient errors don't blank it. |
+| Per-card glow + gradient text scaled to the metric tone (green / red / amber / purple). | 60-minute area chart auto-refreshing every 1 s from router-reported WAN/device speed samples. |
 
 ### Consumption
 ![Consumption](docs/screenshots/consumption.png)
@@ -137,9 +137,12 @@ outage with duration and reason.
 ### Map
 ![Map](docs/screenshots/map.png)
 
-Live radial SVG topology of online devices. Line thickness is proportional to
-current down-speed; nodes are color-coded (red = attacker, amber = new,
-green = active, slate = idle). Click any node to open the device detail page.
+Live radial SVG topology of online devices. When router firmware exposes RSSI,
+WiFi nodes move closer/farther from the router using an indoor path-loss distance
+estimate; otherwise they fall back to connection type/band placement. Line
+thickness is proportional to current speed; nodes are color-coded (red =
+attacker, amber = new, green = active, slate = idle). Click any node to open the
+device detail page.
 
 ### Devices
 ![Devices](docs/screenshots/devices.png)

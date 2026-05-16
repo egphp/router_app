@@ -58,7 +58,8 @@ export class SecurityScanner {
 
     // 2. Sudden high upload speed (potential exfiltration / outbound DDoS)
     for (const d of onlineDevices) {
-      const up = d.hostUploadSpeed ?? 0;
+      // Tenda reports per-client speed as integer KB/s in the UI/API.
+      const up = Math.round(Number(d.hostUploadSpeed ?? 0) * 1024);
       if (up > 5 * 1024 * 1024) { // 5 MB/s sustained upload
         out.push({
           rule: 'high_upload',
