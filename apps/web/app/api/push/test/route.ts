@@ -12,6 +12,6 @@ export async function POST() {
     url: '/alerts',
     tag: 'tenda-test',
     icon: '/icon-192.png',
-  }, { notificationType: 'test' });
+  });
   return NextResponse.json({ ok: true, ...result });
 }

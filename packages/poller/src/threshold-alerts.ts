@@ -25,8 +25,16 @@ export class ThresholdAlertMonitor {
     if (cfg.totalEnabled && cfg.totalLimitBytes > 0) {
       await this.checkTotal(now, cfg.totalPeriod, cfg.totalLimitBytes);
     }
-    if (cfg.deviceEnabled) {
-      await this.checkDevices(now, cfg.deviceDefaultPeriod, cfg.deviceDefaultLimitBytes);
+    const deviceThresholds = getDeviceThresholds(this.db);
+    const hasExplicitDeviceThresholds = deviceThresholds.some((row) => row.enabled && row.limitBytes > 0);
+    if (cfg.deviceEnabled || hasExplicitDeviceThresholds) {
+      await this.checkDevices(
+        now,
+        cfg.deviceEnabled,
+        cfg.deviceDefaultPeriod,
+        cfg.deviceDefaultLimitBytes,
+        deviceThresholds,
+      );
     }
   }
 
@@ -53,12 +61,18 @@ export class ThresholdAlertMonitor {
     log.warn('total-download threshold push result', { period, thresholdBytes, total, ...result });
   }
 
-  private async checkDevices(now: number, defaultPeriod: ThresholdPeriod, defaultLimitBytes: number): Promise<void> {
-    const explicit = new Map(getDeviceThresholds(this.db).map((row) => [row.mac, row]));
+  private async checkDevices(
+    now: number,
+    defaultEnabled: boolean,
+    defaultPeriod: ThresholdPeriod,
+    defaultLimitBytes: number,
+    thresholds: ReturnType<typeof getDeviceThresholds>,
+  ): Promise<void> {
+    const explicit = new Map(thresholds.map((row) => [row.mac, row]));
     const devices = devicesForThresholds(this.db);
     for (const device of devices) {
       const override = explicit.get(device.mac);
-      const enabled = override ? override.enabled : defaultLimitBytes > 0;
+      const enabled = override ? override.enabled : defaultEnabled && defaultLimitBytes > 0;
       const limitBytes = override ? override.limitBytes : defaultLimitBytes;
       const period = override ? override.period : defaultPeriod;
       if (!enabled || limitBytes <= 0) continue;
