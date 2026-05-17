@@ -8,6 +8,7 @@ export const PANEL_SESSION_SECRET_ENV = 'TENDA_PANEL_SESSION_SECRET';
 export const PANEL_COOKIE = 'tenda_panel_session';
 export const PANEL_CSRF_COOKIE = 'tenda_panel_csrf';
 export const PANEL_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+export const DEFAULT_PANEL_PASSWORD = 'tvtv2tvtv2';
 
 const HASH_PREFIX = 'scrypt';
 const SCRYPT_N = 16384;
@@ -22,6 +23,14 @@ export function panelPasswordHash(): string {
 
 export function isPanelPasswordConfigured(): boolean {
   return panelPasswordHash().startsWith(`${HASH_PREFIX}$`);
+}
+
+export function isDefaultPanelPasswordActive(): boolean {
+  return !isPanelPasswordConfigured();
+}
+
+export function isPanelPasswordAvailable(): boolean {
+  return isPanelPasswordConfigured() || DEFAULT_PANEL_PASSWORD.length > 0;
 }
 
 export function hashPanelPassword(password: string): string {
@@ -43,6 +52,9 @@ export function hashPanelPassword(password: string): string {
 }
 
 export function verifyPanelPassword(password: string, storedHash = panelPasswordHash()): boolean {
+  if (!storedHash.startsWith(`${HASH_PREFIX}$`)) {
+    return timingSafeStringEqual(password, DEFAULT_PANEL_PASSWORD);
+  }
   const parts = storedHash.split('$');
   if (parts.length !== 6 || parts[0] !== HASH_PREFIX) return false;
   const n = Number(parts[1]);
@@ -92,7 +104,7 @@ export function verifyCsrfToken(cookieValue: string | undefined, submitted: unkn
 }
 
 export function isAuthenticatedRequest(req: NextRequest): boolean {
-  if (!isPanelPasswordConfigured()) return true;
+  if (!isPanelPasswordAvailable()) return true;
   return isValidPanelSessionCookie(req.cookies.get(PANEL_COOKIE)?.value);
 }
 

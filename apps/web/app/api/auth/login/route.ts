@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@tenda/shared';
 import {
   PANEL_CSRF_COOKIE,
-  isPanelPasswordConfigured,
+  isPanelPasswordAvailable,
   makePanelSessionCookie,
   safeNextPath,
   secureCookieForRequest,
@@ -20,7 +20,7 @@ const LOCK_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 5;
 
 export async function POST(req: Request) {
-  if (!isPanelPasswordConfigured()) {
+  if (!isPanelPasswordAvailable()) {
     return NextResponse.json({ ok: false, error: 'panel password is not configured' }, { status: 503 });
   }
 

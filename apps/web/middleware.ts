@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isAuthenticatedRequest, isLocalOrLanRequest, isPanelPasswordConfigured, safeNextPath } from './lib/remote-auth';
+import { isAuthenticatedRequest, isLocalOrLanRequest, isPanelPasswordAvailable, safeNextPath } from './lib/remote-auth';
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webmanifest|css|js|map)$).*)'],
@@ -51,7 +51,7 @@ export function middleware(req: NextRequest) {
   const configured = isConfigured();
   const isLocalOrLan = isLocalOrLanRequest(req);
 
-  if (!isLocalOrLan && !isPanelPasswordConfigured()) {
+  if (!isLocalOrLan && !isPanelPasswordAvailable()) {
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ ok: false, error: 'panel password must be configured locally' }, { status: 403 });
     }

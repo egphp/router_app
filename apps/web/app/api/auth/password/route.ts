@@ -5,7 +5,6 @@ import {
   PANEL_SESSION_SECRET_ENV,
   hashPanelPassword,
   isPanelPasswordConfigured,
-  isLocalOrLanRequest,
   makePanelSessionCookie,
   secureCookieForRequest,
   setPanelSessionCookie,
@@ -17,9 +16,6 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request) {
   const body = await readJson(req);
   const password = typeof body.password === 'string' ? body.password : '';
-  if (!isPanelPasswordConfigured() && !isLocalOrLanRequest(req)) {
-    return NextResponse.json({ ok: false, error: 'initial panel password must be set locally' }, { status: 403 });
-  }
   if (password.length < 10 || password.length > 256) {
     return NextResponse.json({ ok: false, error: 'password must be 10-256 characters' }, { status: 400 });
   }

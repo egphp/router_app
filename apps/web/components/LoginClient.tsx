@@ -9,6 +9,7 @@ export function LoginClient() {
   const next = safeNext(search.get('next'));
   const [csrf, setCsrf] = useState('');
   const [configured, setConfigured] = useState(true);
+  const [defaultActive, setDefaultActive] = useState(false);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -22,6 +23,7 @@ export function LoginClient() {
         if (cancelled) return;
         setCsrf(typeof data.token === 'string' ? data.token : '');
         setConfigured(Boolean(data.configured));
+        setDefaultActive(Boolean(data.defaultActive));
       })
       .catch(() => {
         if (!cancelled) setMessage({ kind: 'err', text: 'Could not start secure login.' });
@@ -73,6 +75,13 @@ export function LoginClient() {
           <div className="text-sm flex gap-2 p-3 rounded-md bg-accent-red/10 text-accent-red border border-accent-red/30">
             <AlertCircle size={16} className="mt-0.5 shrink-0" />
             <span>Remote password is not configured on this client yet. Set it from LAN first.</span>
+          </div>
+        )}
+
+        {configured && defaultActive && (
+          <div className="text-sm flex gap-2 p-3 rounded-md bg-accent-amber/10 text-accent-amber border border-accent-amber/30">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>Default remote password is active. Change it from Settings after login.</span>
           </div>
         )}
 
