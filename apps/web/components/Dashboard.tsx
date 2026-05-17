@@ -4,18 +4,15 @@ import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
 import { StatCard } from './StatCard';
 import { LiveSpeedChart } from './LiveSpeedChart';
-import { DeviceTable } from './DeviceTable';
 import { AlertBanner } from './AlertBanner';
 import { UpdateBanner } from './UpdateBanner';
 import { NsfwBanner } from './NsfwBanner';
 import { TopTalkers } from './TopTalkers';
 import { CategoryBreakdown } from './CategoryBreakdown';
-import { ConcurrentChart } from './ConcurrentChart';
-import { AnomaliesCard } from './AnomaliesCard';
 import { TelemetryCard } from './TelemetryCard';
 import { TelemetryBar } from './TelemetryBar';
 import { formatBytes, formatDuration, categoryIcon } from '../lib/format';
-import { Activity, Download, Bell, Crown, GripVertical, RotateCcw, Lock, Unlock, PieChart } from 'lucide-react';
+import { Activity, Download, Crown, GripVertical, RotateCcw, Lock, Unlock, PieChart } from 'lucide-react';
 
 interface TopDevice { mac: string; label: string; bytes_down: number; bytes_up: number }
 interface Status {
@@ -34,9 +31,9 @@ interface Status {
   alerts: number;
 }
 
-type WidgetId = 'top-talkers' | 'category-chart' | 'concurrent' | 'anomalies' | 'devices';
+type WidgetId = 'top-talkers' | 'category-chart';
 
-const DEFAULT_ORDER: WidgetId[] = ['top-talkers', 'category-chart', 'concurrent', 'anomalies', 'devices'];
+const DEFAULT_ORDER: WidgetId[] = ['top-talkers', 'category-chart'];
 const STORAGE_KEY = 'tenda.dashboardOrder.v1';
 const EDIT_KEY = 'tenda.dashboardEdit.v1';
 
@@ -60,9 +57,6 @@ function loadOrder(): WidgetId[] {
 const WIDGET_LABELS: Record<WidgetId, string> = {
   'top-talkers': 'Top talkers',
   'category-chart': 'Category breakdown chart',
-  concurrent: 'Concurrent devices',
-  anomalies: 'Anomalies',
-  devices: 'Devices table',
 };
 
 export function Dashboard() {
@@ -132,12 +126,6 @@ export function Dashboard() {
         return <TopTalkers />;
       case 'category-chart':
         return <CategoryBreakdown />;
-      case 'concurrent':
-        return <ConcurrentChart />;
-      case 'anomalies':
-        return <AnomaliesCard />;
-      case 'devices':
-        return <DeviceTable />;
     }
   };
 

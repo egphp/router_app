@@ -36,10 +36,38 @@ export function categoryIcon(cat: string | null | undefined): string {
     case 'computer': return '💻';
     case 'tv': return '📺';
     case 'watch': return '⌚';
+    case 'camera': return '📷';
+    case 'game_console': return '🎮';
+    case 'access_point': return '📶';
+    case 'nas': return '🗄️';
+    case 'streaming': return '▶️';
+    case 'speaker': return '🔊';
+    case 'smart_home': return '🏠';
     case 'iot': return '🔌';
     case 'printer': return '🖨️';
     case 'router': return '📡';
     default: return '❔';
+  }
+}
+
+export function categoryLabel(cat: string | null | undefined): string {
+  switch ((cat || '').toLowerCase()) {
+    case 'phone': return 'Phone';
+    case 'tablet': return 'Tablet';
+    case 'computer': return 'Computer';
+    case 'tv': return 'TV';
+    case 'watch': return 'Watch';
+    case 'camera': return 'Camera';
+    case 'game_console': return 'Game console';
+    case 'router': return 'Router';
+    case 'access_point': return 'Access point';
+    case 'nas': return 'NAS / storage';
+    case 'streaming': return 'Streaming';
+    case 'speaker': return 'Speaker';
+    case 'smart_home': return 'Smart home';
+    case 'iot': return 'IoT';
+    case 'printer': return 'Printer';
+    default: return 'Unknown';
   }
 }
 

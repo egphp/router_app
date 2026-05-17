@@ -87,7 +87,7 @@ export default function SecurityPage() {
       </div>
 
       <div className="card p-5 animate-fade-in">
-        <div className="flex items-center justify-between mb-3">
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="font-semibold flex items-center gap-2">
             <FileText size={16} className="text-accent" /> Router syslog
             <span className="text-xs text-slate-500 font-normal">({lines.length} entries)</span>
@@ -114,7 +114,23 @@ export default function SecurityPage() {
           </div>
         ) : (
           <div className="bg-bg-elevated rounded overflow-hidden">
-            <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+            <div className="max-h-[500px] divide-y divide-bg-border/40 overflow-y-auto sm:hidden">
+              {lines.map((l) => (
+                <article key={l.id} className="p-3 font-mono text-xs">
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-slate-400">{new Date(l.ts).toLocaleTimeString()}</div>
+                      <div className="mt-1 break-all text-accent">{l.tag ?? '-'}</div>
+                    </div>
+                    <span className={`shrink-0 rounded border border-bg-border bg-bg-card px-2 py-1 ${severityClass(l.severity)}`}>
+                      {SEVERITY_NAMES[l.severity ?? 6] ?? '?'}
+                    </span>
+                  </div>
+                  <div className="mt-2 break-words text-slate-200">{l.message}</div>
+                </article>
+              ))}
+            </div>
+            <div className="hidden max-h-[500px] overflow-x-auto overflow-y-auto sm:block">
               <table className="w-full text-xs font-mono">
                 <thead className="bg-bg-card/60 sticky top-0">
                   <tr className="text-slate-500">

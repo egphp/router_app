@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
-import { getDevice, getDeviceStats, getDeviceTraffic, getDeviceTrafficForDay, updateDevice, getDeviceAttacks, getDeviceDailyUsage, type Bucket } from '../../../../lib/queries';
+import { deleteDevice, getDevice, getDeviceStats, getDeviceTraffic, getDeviceTrafficForDay, getDeviceSessions, updateDevice, getDeviceAttacks, getDeviceDailyUsage, type Bucket } from '../../../../lib/queries';
 import { getRouterLiveSnapshot, mergeRouterLiveDevice } from '../../../../lib/router-live';
 
 export const dynamic = 'force-dynamic';
 
 const VALID_RANGES: Bucket[] = ['hour', 'today', 'week', 'month', 'year', 'all'];
+const MAC_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){5}$/;
 
 export async function GET(req: Request, ctx: { params: Promise<{ mac: string }> }) {
   const { mac } = await ctx.params;
@@ -20,11 +21,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ mac: string }> 
   const live = liveRequested ? await getRouterLiveSnapshot().catch(() => null) : null;
   const traffic = dayStart === null ? getDeviceTraffic(macUp, range) : getDeviceTrafficForDay(macUp, dayStart);
   const stats = getDeviceStats(macUp);
+  const sessions = getDeviceSessions(macUp);
   const attacks = getDeviceAttacks(macUp);
   const dailyUsage = getDeviceDailyUsage(macUp, 365);
   return NextResponse.json({
     device: live ? mergeRouterLiveDevice(device as any, live) : device,
     stats,
+    sessions,
     range,
     traffic,
     attacks,
@@ -57,4 +60,15 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ mac: string }
   const body = await req.json();
   updateDevice(decodeURIComponent(mac).toUpperCase(), body);
   return NextResponse.json({ ok: true });
+}
+
+export async function DELETE(_req: Request, ctx: { params: Promise<{ mac: string }> }) {
+  const { mac } = await ctx.params;
+  const macUp = decodeURIComponent(mac).toUpperCase();
+  if (!MAC_RE.test(macUp)) return NextResponse.json({ error: 'invalid mac' }, { status: 400 });
+
+  const result = deleteDevice(macUp);
+  if (!result.existed) return NextResponse.json({ error: 'device not found' }, { status: 404 });
+
+  return NextResponse.json({ ok: true, deleted: macUp, changes: result.changes });
 }

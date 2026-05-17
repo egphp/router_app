@@ -1,14 +1,23 @@
 import { NextResponse } from 'next/server';
+import { getDb, suppressAlertFuture } from '@tenda/shared';
 import { getAlerts, dismissAlert, dismissAllAlerts, markAllDevicesKnown, dismissAlertsByKind } from '../../../lib/queries';
+import { ensureWebMigrations } from '../../../lib/web-migrations';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
+  ensureWebMigrations();
   return NextResponse.json({ alerts: getAlerts(200) });
 }
 
 export async function PATCH(req: Request) {
+  ensureWebMigrations();
   const body = await req.json();
+  if (body?.action === 'ignore_future' && typeof body?.id === 'number') {
+    const result = suppressAlertFuture(getDb(), body.id);
+    if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 400 });
+    return NextResponse.json(result);
+  }
   if (typeof body?.id === 'number') {
     dismissAlert(body.id);
     return NextResponse.json({ ok: true });

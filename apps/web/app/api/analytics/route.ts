@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import {
-  getHeatmap, getConcurrentDevices, getTopTalkers, getAnomalies, getCategoryBreakdown, getRouterUptimeSeries
+  getHeatmap,
+  getConcurrentDevices,
+  getTopTalkers,
+  getAnomalies,
+  getCategoryBreakdown,
+  getRouterUptimeSeries,
+  type TopTalkersRange,
 } from '../../../lib/queries';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +25,8 @@ export async function GET(req: Request) {
       return NextResponse.json({ data: getConcurrentDevices(minutes) });
     }
     case 'top': {
-      const range = (url.searchParams.get('range') ?? 'today') as any;
+      const requestedRange = url.searchParams.get('range');
+      const range = isTopTalkersRange(requestedRange) ? requestedRange : 'all';
       const limit = Number(url.searchParams.get('limit') ?? '10');
       return NextResponse.json({ data: getTopTalkers(range, limit) });
     }
@@ -38,4 +45,8 @@ export async function GET(req: Request) {
     default:
       return NextResponse.json({ error: 'unknown kind' }, { status: 400 });
   }
+}
+
+function isTopTalkersRange(value: string | null): value is TopTalkersRange {
+  return value === 'all' || value === 'hour' || value === 'today' || value === 'week' || value === 'month';
 }

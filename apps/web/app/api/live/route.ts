@@ -25,6 +25,7 @@ export async function GET(req: Request) {
     direct: {
       all_devices_down_bps: live.all_devices_down_bps,
       all_devices_up_bps: live.all_devices_up_bps,
+      counter_down_bps: live.counter_down_bps,
       wan_down_bps: live.wan_down_bps,
       wan_up_bps: live.wan_up_bps,
     },

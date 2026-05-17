@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { RouterClient } from './router-client.js';
+import { insertAlertIfAllowed, sendAttackPush } from '@tenda/shared';
 import { log } from './logger.js';
 
 interface LogEntry {
@@ -43,6 +44,13 @@ export class SystemLogPuller {
     let added = 0;
     let attacks = 0;
     const now = Date.now();
+    const attackPushes: Array<{
+      mac: string | null;
+      ip: string | null;
+      kind: string | null;
+      count: number | null;
+      message: string;
+    }> = [];
 
     const txn = this.db.transaction(() => {
       for (const e of entries) {
@@ -69,11 +77,11 @@ export class SystemLogPuller {
           const key = `${parsed.attacker_mac}|${parsed.attack_kind}|${dayBucket}`;
           if (!this.notifiedAttacks.has(key)) {
             this.notifiedAttacks.set(key, now);
-            attacks++;
-            this.insertAlert.run(
+            const alert = insertAlertIfAllowed(
+              this.db,
               'attack',
               parsed.attacker_mac,
-              JSON.stringify({
+              {
                 rule: 'router_detected_attack',
                 severity: parsed.attack_count >= 500 ? 'critical' : 'warn',
                 kind: parsed.attack_kind,
@@ -82,14 +90,33 @@ export class SystemLogPuller {
                 mac: parsed.attacker_mac,
                 router_time: e.sysLogTime,
                 router_message: e.sysLogMsg,
-              }),
+              },
               ts,
             );
+            if (alert.inserted) {
+              attacks++;
+              attackPushes.push({
+                mac: parsed.attacker_mac,
+                ip: parsed.attacker_ip,
+                kind: parsed.attack_kind,
+                count: parsed.attack_count,
+                message: e.sysLogMsg,
+              });
+            }
           }
         }
       }
     });
     txn();
+
+    for (const alert of attackPushes) {
+      try {
+        const result = await sendAttackPush(this.db, alert);
+        log.warn('attack push result', { mac: alert.mac, kind: alert.kind, ...result });
+      } catch (error) {
+        log.warn('attack push failed', String(error));
+      }
+    }
 
     if (added > 0) log.info('system-log-puller', { added, attacks });
     return { added, attacks };

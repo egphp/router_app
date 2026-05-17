@@ -20,6 +20,18 @@ const RANGE_OPTIONS = [
   { value: 90, label: 'Last 90 days' },
 ];
 
+function dayLabel(ts: number, compact = false) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayTs = today.getTime();
+  const yesterday = todayTs - 86400000;
+  const dayBefore = todayTs - 2 * 86400000;
+  if (ts === todayTs) return compact ? 'Today' : 'Today';
+  if (ts === yesterday) return compact ? 'Yest' : 'Yesterday';
+  if (ts === dayBefore) return compact ? '2d' : 'Day-before';
+  return new Date(ts).toLocaleDateString([], compact ? { day: 'numeric' } : { month: 'short', day: 'numeric' });
+}
+
 export default function ReportPage() {
   const [days, setDays] = useState(30);
   const { data } = useSWR<Resp>(`/api/report?days=${days}`, fetcher, { refreshInterval: 30000 });
@@ -49,16 +61,18 @@ export default function ReportPage() {
     }
     return dayList.map((t) => ({ ts: t, ...(totals.get(t) ?? { bd: 0, bu: 0 }) }));
   }, [filtered, dayList]);
+  const maxDailyTotal = Math.max(1, ...dailyTotals.map((x) => x.bd + x.bu));
+  const compactDailyTotals = dailyTotals.slice(-7);
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-semibold">Daily report</h1>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:flex sm:items-center">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…"
-            className="bg-bg-elevated border border-bg-border rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-accent" />
+            className="w-full min-w-0 bg-bg-elevated border border-bg-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent sm:w-56" />
           <select value={days} onChange={(e) => setDays(Number(e.target.value))}
-            className="bg-bg-elevated border border-bg-border rounded px-2 py-1.5 text-sm">
+            className="w-full min-w-0 bg-bg-elevated border border-bg-border rounded px-2 py-1.5 text-sm sm:w-auto">
             {RANGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
@@ -66,14 +80,26 @@ export default function ReportPage() {
 
       <div className="card p-5 animate-fade-in">
         <div className="stat-label mb-2">Network-wide daily totals</div>
-        <div className="flex items-end gap-1 h-32 overflow-x-auto">
+        <div className="grid h-36 grid-cols-7 items-end gap-1 lg:hidden">
+          {compactDailyTotals.map((d) => {
+            const total = d.bd + d.bu;
+            const h = (total / maxDailyTotal) * 100;
+            return (
+              <div key={d.ts} className="flex min-w-0 flex-col items-center text-[9px] text-slate-500"
+                   title={`${dayLabel(d.ts)} · total ${formatBytes(total)} (↓ ${formatBytes(d.bd)} · ↑ ${formatBytes(d.bu)})`}>
+                <div className="mb-1 max-w-full truncate text-slate-400">{formatBytes(total, 0).replace(' ', '')}</div>
+                <div className="w-full rounded-t bg-gradient-to-t from-blue-500 to-purple-500 transition-all"
+                  style={{ height: `${Math.max(2, h)}%` }} />
+                <div className="mt-1 max-w-full truncate">{dayLabel(d.ts, true)}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="hidden items-end gap-1 h-32 overflow-x-auto lg:flex">
           {dailyTotals.map((d) => {
             const total = d.bd + d.bu;
-            const maxTotal = Math.max(1, ...dailyTotals.map((x) => x.bd + x.bu));
-            const h = (total / maxTotal) * 100;
-            const today = (() => { const x = new Date(); x.setHours(0,0,0,0); return x.getTime(); })();
-            const yesterday = today - 86400000;
-            const label = d.ts === today ? 'Today' : d.ts === yesterday ? 'Yesterday' : new Date(d.ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
+            const h = (total / maxDailyTotal) * 100;
+            const label = dayLabel(d.ts);
             return (
               <div key={d.ts} className="flex flex-col items-center text-[10px] text-slate-500 min-w-[28px]"
                    title={`${label} · total ${formatBytes(total)} (↓ ${formatBytes(d.bd)} · ↑ ${formatBytes(d.bu)})`}>
@@ -88,20 +114,58 @@ export default function ReportPage() {
       </div>
 
       <div className="card overflow-hidden animate-fade-in">
-        <div className="overflow-x-auto -webkit-overflow-scrolling-touch">
+        <div className="divide-y divide-bg-border min-[2700px]:hidden">
+          {filtered.map((r) => {
+            const recent = r.daily.slice(-7);
+            return (
+              <article key={r.mac} className="p-3">
+                <Link href={`/devices/${encodeURIComponent(r.mac)}`}
+                  className="flex min-w-0 items-start gap-2 hover:text-accent">
+                  <span className="shrink-0 text-base">{categoryIcon(r.category)}</span>
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{r.label}</div>
+                    <div className="break-all text-[10px] text-slate-500">{r.mac}</div>
+                  </div>
+                </Link>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <div className="stat-label">Total</div>
+                    <div className="font-semibold text-slate-100">{formatBytes(r.total_down + r.total_up)}</div>
+                  </div>
+                  <div>
+                    <div className="stat-label">Transfer</div>
+                    <div className="text-slate-400">↓ {formatBytes(r.total_down, 0)} · ↑ {formatBytes(r.total_up, 0)}</div>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-7 gap-1">
+                  {recent.map((d) => {
+                    const total = d.bytes_down + d.bytes_up;
+                    const intensity = total > 0 ? Math.min(1, total / todayMax) : 0;
+                    return (
+                      <div key={d.day_ts} className="min-w-0 rounded border border-bg-border bg-bg-elevated/40 p-1 text-center text-[9px]"
+                        title={`${new Date(d.day_ts).toLocaleDateString()}: ↓${formatBytes(d.bytes_down)} ↑${formatBytes(d.bytes_up)}`}>
+                        <div className="truncate text-slate-500">{dayLabel(d.day_ts, true)}</div>
+                        <div className="mt-1 h-1 rounded"
+                          style={{ backgroundColor: intensity > 0 ? `rgba(96, 165, 250, ${0.3 + intensity * 0.5})` : 'rgba(71, 85, 105, 0.4)' }} />
+                        <div className="mt-1 truncate tabular-nums text-slate-300">{total > 0 ? formatBytes(total, 0).replace(' ', '') : '0'}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </article>
+            );
+          })}
+          {filtered.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm text-slate-500">No devices.</div>
+          )}
+        </div>
+        <div className="hidden overflow-x-auto -webkit-overflow-scrolling-touch min-[2700px]:block">
           <table className="w-full text-xs min-w-[600px]">
             <thead className="bg-bg-elevated/40 text-[10px] uppercase tracking-wide text-slate-500 sticky top-0">
               <tr>
                 <th className="px-3 py-2 text-left min-w-[180px] sticky left-0 bg-bg-card z-10">Device</th>
                 {dayList.map((t) => {
-                  const today = (() => { const x = new Date(); x.setHours(0,0,0,0); return x.getTime(); })();
-                  const yesterday = today - 86400000;
-                  const dayBefore = today - 2 * 86400000;
-                  const label =
-                    t === today ? 'Today' :
-                    t === yesterday ? 'Yesterday' :
-                    t === dayBefore ? 'Day-before' :
-                    new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+                  const label = dayLabel(t);
                   return <th key={t} className="px-2 py-2 text-right min-w-[60px]">{label}</th>;
                 })}
                 <th className="px-3 py-2 text-right min-w-[80px]">Total</th>

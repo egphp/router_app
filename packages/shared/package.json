@@ -25,6 +25,10 @@
     "./time": {
       "types": "./dist/time.d.ts",
       "default": "./dist/time.js"
+    },
+    "./push": {
+      "types": "./dist/push.d.ts",
+      "default": "./dist/push.js"
     }
   },
   "scripts": {
@@ -34,11 +38,13 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.5",
+    "@types/web-push": "^3.6.4",
     "typescript": "^5.7.3"
   }
 }

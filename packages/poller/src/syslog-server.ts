@@ -44,7 +44,7 @@ export class SyslogServer {
         const text = msg.toString('utf-8');
         const parsed = parseSyslog(text);
         this.insertLog.run({
-          ts: Date.now(),
+          ts: parsed.ts ?? Date.now(),
           priority: parsed.priority,
           facility: parsed.facility,
           severity: parsed.severity,
@@ -80,6 +80,7 @@ export class SyslogServer {
 }
 
 interface ParsedSyslog {
+  ts: number | null;
   priority: number | null;
   facility: number | null;
   severity: number | null;
@@ -99,16 +100,31 @@ export function parseSyslog(raw: string): ParsedSyslog {
   }
   const facility = priority !== null ? Math.floor(priority / 8) : null;
   const severity = priority !== null ? priority % 8 : null;
+  const ts = parseEmbeddedRouterTime(body);
 
   // Try to parse "MMM dd HH:mm:ss host tag: message"
   const m2 = body.match(/^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+([^:]+):\s*(.*)$/s);
   if (m2) {
-    return { priority, facility, severity, host: m2[2], tag: m2[3], message: m2[4].trim() };
+    return { ts, priority, facility, severity, host: m2[2], tag: m2[3], message: m2[4].trim() };
   }
   // Try "host tag: msg"
-  const m3 = body.match(/^(\S+)\s+([^:]+):\s*(.*)$/s);
+  const m3 = body.match(/^(\S+)\s+([A-Za-z0-9_.-]+):\s*(.*)$/s);
   if (m3) {
-    return { priority, facility, severity, host: m3[1], tag: m3[2], message: m3[3].trim() };
+    return { ts, priority, facility, severity, host: m3[1], tag: m3[2], message: m3[3].trim() };
   }
-  return { priority, facility, severity, host: null, tag: null, message: body.trim() };
+  return { ts, priority, facility, severity, host: null, tag: null, message: body.trim() };
+}
+
+function parseEmbeddedRouterTime(body: string): number | null {
+  const match = body.match(/\btime:(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\b/);
+  if (!match) return null;
+  const ts = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+  ).getTime();
+  return Number.isFinite(ts) ? ts : null;
 }

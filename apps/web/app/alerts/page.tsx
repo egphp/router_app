@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
-import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter } from 'lucide-react';
+import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter, Ban, ShieldAlert, Gauge } from 'lucide-react';
 
 interface Alert {
   id: number; kind: string; mac: string | null; payload: string | null;
@@ -16,6 +16,10 @@ const KINDS = [
   { value: 'outage', label: 'Outages' },
   { value: 'reboot', label: 'Reboots' },
   { value: 'security', label: 'Security' },
+  { value: 'attack', label: 'Attacks' },
+  { value: 'nsfw', label: 'Adult sites' },
+  { value: 'total_download_threshold', label: 'Total limit' },
+  { value: 'device_download_threshold', label: 'Device limit' },
 ];
 
 export default function AlertsPage() {
@@ -56,6 +60,15 @@ export default function AlertsPage() {
 
   const dismissOne = async (id: number) => {
     await fetch('/api/alerts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+    mutate();
+  };
+
+  const ignoreFuture = async (id: number) => {
+    await fetch('/api/alerts', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'ignore_future', id }),
+    });
     mutate();
   };
 
@@ -107,7 +120,7 @@ export default function AlertsPage() {
           const isDismissed = !!a.dismissed_at;
           const tone = severityTone(a.kind, payload);
           return (
-            <div key={a.id} className={`card p-4 flex items-start gap-3 animate-fade-in border-l-4 ${tone.border} ${isDismissed ? 'opacity-50' : ''}`}>
+            <div key={a.id} className={`card p-4 flex flex-col gap-3 animate-fade-in border-l-4 sm:flex-row sm:items-start ${tone.border} ${isDismissed ? 'opacity-50' : ''}`}>
               <div className="mt-0.5">{iconFor(a.kind, tone.color)}</div>
               <div className="flex-1 min-w-0">
                 <div className="font-medium">{titleFor(a, payload)}</div>
@@ -127,10 +140,16 @@ export default function AlertsPage() {
                 )}
               </div>
               {!isDismissed && (
-                <button onClick={() => dismissOne(a.id)}
-                  className="text-xs px-3 py-1.5 rounded bg-bg-elevated border border-bg-border hover:bg-bg-border">
-                  Dismiss
-                </button>
+                <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                  <button onClick={() => ignoreFuture(a.id)}
+                    className="inline-flex items-center justify-center gap-1.5 rounded border border-accent-amber/30 bg-accent-amber/10 px-3 py-1.5 text-xs text-accent-amber hover:bg-accent-amber/20">
+                    <Ban size={12} /> Ignore future
+                  </button>
+                  <button onClick={() => dismissOne(a.id)}
+                    className="rounded bg-bg-elevated border border-bg-border px-3 py-1.5 text-xs hover:bg-bg-border">
+                    Dismiss
+                  </button>
+                </div>
               )}
             </div>
           );
@@ -152,6 +171,14 @@ function titleFor(a: Alert, payload: any): string {
       return 'Router rebooted';
     case 'security':
       return payload?.message || `Security: ${payload?.rule}`;
+    case 'attack':
+      return `Router attack: ${payload?.kind || payload?.attack_kind || payload?.rule || 'attack'}`;
+    case 'nsfw':
+      return `Adult-content visit: ${payload?.domain || 'unknown domain'}`;
+    case 'total_download_threshold':
+      return 'Total download threshold crossed';
+    case 'device_download_threshold':
+      return `Device threshold: ${a.device_label || payload?.label || a.mac}`;
     default:
       return a.kind;
   }
@@ -164,6 +191,10 @@ function iconFor(kind: string, color: string) {
     case 'outage': return <WifiOff {...props} />;
     case 'reboot': return <RefreshCw {...props} />;
     case 'security': return <Shield {...props} />;
+    case 'attack':
+    case 'nsfw': return <ShieldAlert {...props} />;
+    case 'total_download_threshold':
+    case 'device_download_threshold': return <Gauge {...props} />;
     default: return <Bell {...props} />;
   }
 }
@@ -173,6 +204,8 @@ function severityTone(kind: string, payload: any) {
   if (sev === 'critical' || kind === 'outage') return { border: 'border-l-accent-red', color: 'text-accent-red', badge: 'bg-accent-red/20 text-accent-red' };
   if (sev === 'warn' || kind === 'reboot') return { border: 'border-l-accent-amber', color: 'text-accent-amber', badge: 'bg-accent-amber/20 text-accent-amber' };
   if (kind === 'new_device') return { border: 'border-l-accent-red', color: 'text-accent-red', badge: 'bg-accent-red/20 text-accent-red' };
+  if (kind === 'attack' || kind === 'nsfw') return { border: 'border-l-accent-red', color: 'text-accent-red', badge: 'bg-accent-red/20 text-accent-red' };
+  if (kind === 'total_download_threshold' || kind === 'device_download_threshold') return { border: 'border-l-accent-amber', color: 'text-accent-amber', badge: 'bg-accent-amber/20 text-accent-amber' };
   if (kind === 'security') return { border: 'border-l-accent-purple', color: 'text-accent-purple', badge: 'bg-accent-purple/20 text-accent-purple' };
   return { border: 'border-l-accent', color: 'text-accent', badge: 'bg-accent/20 text-accent' };
 }

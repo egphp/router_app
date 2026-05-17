@@ -3,7 +3,7 @@ import useSWR from 'swr';
 import { useState } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { fetcher } from '../lib/fetcher';
-import { formatBytes, categoryIcon } from '../lib/format';
+import { formatBytes, categoryIcon, categoryLabel } from '../lib/format';
 
 interface Cat { category: string; bytes_down: number; bytes_up: number; device_count: number }
 
@@ -13,19 +13,19 @@ export function CategoryBreakdown() {
   const [range, setRange] = useState<'today' | 'week' | 'month'>('today');
   const { data } = useSWR<{ data: Cat[] }>(`/api/analytics?kind=categories&range=${range}`, fetcher, { refreshInterval: 60000 });
   const cats = data?.data ?? [];
-  const chartData = cats.map((c) => ({ name: c.category, value: c.bytes_down + c.bytes_up }));
+  const chartData = cats.map((c) => ({ name: categoryLabel(c.category), value: c.bytes_down + c.bytes_up }));
 
   return (
     <div className="card p-5 animate-fade-in">
-      <div className="flex items-center justify-between mb-4">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+        <div className="min-w-0">
           <div className="stat-label">Traffic by category</div>
           <div className="text-xs text-slate-500 mt-1">Bytes grouped by device class</div>
         </div>
-        <div className="flex bg-bg-elevated border border-bg-border rounded overflow-hidden text-xs">
+        <div className="grid grid-cols-3 w-full sm:w-auto bg-bg-elevated border border-bg-border rounded overflow-hidden text-xs">
           {(['today', 'week', 'month'] as const).map((r) => (
             <button key={r} onClick={() => setRange(r)}
-              className={`px-3 py-1 ${range === r ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-100'}`}>
+              className={`px-2 sm:px-3 py-1 text-center ${range === r ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-100'}`}>
               {r}
             </button>
           ))}
@@ -51,7 +51,7 @@ export function CategoryBreakdown() {
               <div className="flex items-center gap-2 min-w-0">
                 <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
                 <span className="text-lg">{categoryIcon(c.category)}</span>
-                <span className="truncate">{c.category}</span>
+                <span className="truncate">{categoryLabel(c.category)}</span>
                 <span className="text-xs text-slate-500">({c.device_count})</span>
               </div>
               <div className="text-right shrink-0 leading-tight">

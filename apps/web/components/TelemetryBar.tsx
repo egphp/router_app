@@ -110,7 +110,7 @@ export function TelemetryBar() {
         {wans.length > 0 && (
           <>
             <div className="hidden md:block w-px h-8 bg-bg-border/60" />
-            <div className="flex items-center gap-3 sm:gap-4 shrink-0 flex-wrap">
+            <div className="grid w-full min-w-0 grid-cols-1 gap-2 min-[420px]:grid-cols-2 sm:w-auto sm:flex sm:items-center sm:gap-4 sm:flex-wrap">
               {wans.map((w, i) => {
                 const dlMB = getNum(w, 'FlowDownstream', 'downMB');
                 const ulMB = getNum(w, 'FlowUpstream', 'upMB');
@@ -119,11 +119,11 @@ export function TelemetryBar() {
                 const totalBytes = (dlBytes ?? 0) + (ulBytes ?? 0);
                 const hasAny = dlBytes !== undefined || ulBytes !== undefined;
                 return (
-                  <div key={i} className="flex items-center gap-2">
+                  <div key={i} className="flex min-w-0 items-center gap-2">
                     <Globe size={12} className="text-slate-500" />
-                    <div>
+                    <div className="min-w-0">
                       <div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold leading-none">WAN {i + 1}</div>
-                      <div className="flex items-baseline gap-1.5 mt-0.5 text-xs tabular-nums">
+                      <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 mt-0.5 text-xs tabular-nums">
                         <span className="text-slate-100 font-semibold">Σ {hasAny ? formatBytes(totalBytes, 0) : '—'}</span>
                         <span className="text-slate-600">·</span>
                         <span className="text-blue-400">↓ {dlBytes !== undefined ? formatBytes(dlBytes, 0) : '—'}</span>

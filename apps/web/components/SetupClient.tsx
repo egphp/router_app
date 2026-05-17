@@ -7,11 +7,23 @@ export function SetupClient({ alreadyConfigured }: { alreadyConfigured: boolean 
   const router = useRouter();
   const [host, setHost] = useState('192.168.0.1');
   const [password, setPassword] = useState('');
+  const [panelPassword, setPanelPassword] = useState('');
+  const [panelConfirm, setPanelConfirm] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [busy, setBusy] = useState<null | 'test' | 'save'>(null);
   const [result, setResult] = useState<null | { kind: 'ok' | 'err'; msg: string }>(null);
 
   const callApi = async (action: 'test' | 'save') => {
+    if (action === 'save' && !alreadyConfigured) {
+      if (panelPassword.length < 10) {
+        setResult({ kind: 'err', msg: 'Remote panel password must be at least 10 characters.' });
+        return;
+      }
+      if (panelPassword !== panelConfirm) {
+        setResult({ kind: 'err', msg: 'Remote panel passwords do not match.' });
+        return;
+      }
+    }
     setBusy(action);
     setResult(null);
     try {
@@ -25,6 +37,18 @@ export function SetupClient({ alreadyConfigured }: { alreadyConfigured: boolean 
         if (action === 'test') {
           setResult({ kind: 'ok', msg: '✓ Router reachable. Credentials valid.' });
         } else {
+          if (panelPassword) {
+            const authRes = await fetch('/api/auth/password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password: panelPassword }),
+            });
+            const authJson = await authRes.json();
+            if (!authRes.ok || !authJson.ok) {
+              setResult({ kind: 'err', msg: authJson.error || 'Router saved, but panel password was not saved.' });
+              return;
+            }
+          }
           setResult({ kind: 'ok', msg: 'Saved! Starting monitor…' });
           setTimeout(() => {
             window.location.href = '/';
@@ -67,6 +91,37 @@ export function SetupClient({ alreadyConfigured }: { alreadyConfigured: boolean 
             className="block w-full bg-bg-elevated border border-bg-border rounded-md px-3 py-2.5 text-sm font-mono focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/40"
           />
         </label>
+
+        {!alreadyConfigured && (
+          <>
+            <label className="block">
+              <span className="text-xs text-slate-400 flex items-center gap-1.5 mb-1.5">
+                <Lock size={12} /> Remote panel password
+              </span>
+              <input
+                type={showPwd ? 'text' : 'password'}
+                value={panelPassword}
+                onChange={(e) => setPanelPassword(e.target.value)}
+                placeholder="Minimum 10 characters"
+                autoComplete="new-password"
+                className="block w-full bg-bg-elevated border border-bg-border rounded-md px-3 py-2.5 text-sm font-mono focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/40"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-400 flex items-center gap-1.5 mb-1.5">
+                <Lock size={12} /> Confirm panel password
+              </span>
+              <input
+                type={showPwd ? 'text' : 'password'}
+                value={panelConfirm}
+                onChange={(e) => setPanelConfirm(e.target.value)}
+                placeholder="Repeat panel password"
+                autoComplete="new-password"
+                className="block w-full bg-bg-elevated border border-bg-border rounded-md px-3 py-2.5 text-sm font-mono focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/40"
+              />
+            </label>
+          </>
+        )}
 
         <label className="block">
           <span className="text-xs text-slate-400 flex items-center gap-1.5 mb-1.5">
@@ -119,7 +174,7 @@ export function SetupClient({ alreadyConfigured }: { alreadyConfigured: boolean 
           </button>
           <button
             onClick={() => callApi('save')}
-            disabled={!host || !password || busy !== null}
+            disabled={!host || !password || (!alreadyConfigured && (!panelPassword || !panelConfirm)) || busy !== null}
             className="px-4 py-2.5 rounded-md bg-accent text-white text-sm font-medium hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-2 flex-1"
           >
             {busy === 'save' ? <Loader size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}

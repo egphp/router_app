@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { insertAlertIfAllowed, sendOutagePush } from '@tenda/shared';
 import { log } from './logger.js';
 
 export type OutageReason = 'unreachable' | 'auth_fail' | 'router_reboot';
@@ -28,7 +29,12 @@ export class OutageMonitor {
     if (this.consecutiveFailures >= this.failureThreshold && !this.openOutageStart) {
       this.openOutageStart = now;
       this.insertOutage.run(now, reason, notes ?? null);
-      this.insertAlert.run('outage', JSON.stringify({ started_at: now, reason, notes }), now);
+      const alert = insertAlertIfAllowed(this.db, 'outage', null, { started_at: now, reason, notes }, now);
+      if (alert.inserted) {
+        void sendOutagePush(this.db, { kind: 'outage', reason, notes: notes ?? null, startedAt: now })
+          .then((result) => log.warn('outage push result', result))
+          .catch((error) => log.warn('outage push failed', String(error)));
+      }
       log.warn('outage opened', { reason, notes });
     }
   }
@@ -46,7 +52,12 @@ export class OutageMonitor {
     const reboot_start = now - (uptimeAfter * 1000);
     this.insertOutage.run(reboot_start, 'router_reboot', JSON.stringify({ uptimeBefore, uptimeAfter }));
     this.closeOutage.run(now, reboot_start);
-    this.insertAlert.run('reboot', JSON.stringify({ uptimeBefore, uptimeAfter }), now);
+    const alert = insertAlertIfAllowed(this.db, 'reboot', null, { uptimeBefore, uptimeAfter }, now);
+    if (alert.inserted) {
+      void sendOutagePush(this.db, { kind: 'reboot', uptimeBefore, uptimeAfter })
+        .then((result) => log.warn('reboot push result', result))
+        .catch((error) => log.warn('reboot push failed', String(error)));
+    }
     log.warn('router reboot detected', { uptimeBefore, uptimeAfter });
   }
 

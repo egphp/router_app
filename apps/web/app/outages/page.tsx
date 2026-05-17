@@ -52,40 +52,65 @@ export default function OutagesPage() {
         </div>
       </div>
       <div className="card overflow-hidden animate-fade-in">
-        <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[500px]">
-          <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
-            <tr>
-              <SortHeader label="Started" k="started" sort={sort} onSort={onSort} indicator={indicator} align="left" />
-              <SortHeader label="Duration" k="duration" sort={sort} onSort={onSort} indicator={indicator} align="left" />
-              <SortHeader label="Reason" k="reason" sort={sort} onSort={onSort} indicator={indicator} align="left" defaultDir="asc" />
-              <th className="px-4 py-2 text-left">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((o) => (
-              <tr key={o.started_at} className="border-t border-bg-border">
-                <td className={clsx('px-4 py-2.5', sort.key === 'started' && 'col-sorted')}>
-                  <div className="text-slate-200">{new Date(o.started_at).toLocaleString()}</div>
+        <div className="divide-y divide-bg-border lg:hidden">
+          {sorted.map((o) => (
+            <article key={o.started_at} className="p-3">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-slate-200">{new Date(o.started_at).toLocaleString()}</div>
                   <div className="text-xs text-slate-500">{timeAgo(o.started_at)}</div>
-                </td>
-                <td className={clsx('px-4 py-2.5 tabular-nums', sort.key === 'duration' && 'col-sorted')}>
-                  {o.ended_at ? formatDuration((o.ended_at - o.started_at) / 1000) : <span className="text-accent-red">ongoing</span>}
-                </td>
-                <td className={clsx('px-4 py-2.5', sort.key === 'reason' && 'col-sorted')}>
-                  <span className="text-xs bg-bg-elevated rounded px-2 py-1 border border-bg-border">{o.reason}</span>
-                </td>
-                <td className="px-4 py-2.5 text-xs text-slate-500 max-w-md truncate">{o.notes || '—'}</td>
+                </div>
+                <div className="shrink-0 rounded border border-bg-border bg-bg-elevated px-2 py-1 text-xs">
+                  {o.reason}
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <div className="stat-label">Duration</div>
+                  <div className="tabular-nums">{o.ended_at ? formatDuration((o.ended_at - o.started_at) / 1000) : <span className="text-accent-red">ongoing</span>}</div>
+                </div>
+                <div>
+                  <div className="stat-label">Notes</div>
+                  <div className="break-words text-slate-500">{o.notes || '—'}</div>
+                </div>
+              </div>
+            </article>
+          ))}
+          {sorted.length === 0 && <div className="px-4 py-8 text-center text-slate-500">No outages recorded yet.</div>}
+        </div>
+        <div className="hidden overflow-x-auto lg:block">
+          <table className="w-full text-sm min-w-[500px]">
+            <thead className="text-xs uppercase tracking-wide text-slate-500 bg-bg-elevated/40">
+              <tr>
+                <SortHeader label="Started" k="started" sort={sort} onSort={onSort} indicator={indicator} align="left" />
+                <SortHeader label="Duration" k="duration" sort={sort} onSort={onSort} indicator={indicator} align="left" />
+                <SortHeader label="Reason" k="reason" sort={sort} onSort={onSort} indicator={indicator} align="left" defaultDir="asc" />
+                <th className="px-4 py-2 text-left">Notes</th>
               </tr>
-            ))}
-            {sorted.length === 0 && (
-              <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No outages recorded yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sorted.map((o) => (
+                <tr key={o.started_at} className="border-t border-bg-border">
+                  <td className={clsx('px-4 py-2.5', sort.key === 'started' && 'col-sorted')}>
+                    <div className="text-slate-200">{new Date(o.started_at).toLocaleString()}</div>
+                    <div className="text-xs text-slate-500">{timeAgo(o.started_at)}</div>
+                  </td>
+                  <td className={clsx('px-4 py-2.5 tabular-nums', sort.key === 'duration' && 'col-sorted')}>
+                    {o.ended_at ? formatDuration((o.ended_at - o.started_at) / 1000) : <span className="text-accent-red">ongoing</span>}
+                  </td>
+                  <td className={clsx('px-4 py-2.5', sort.key === 'reason' && 'col-sorted')}>
+                    <span className="text-xs bg-bg-elevated rounded px-2 py-1 border border-bg-border">{o.reason}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-slate-500 max-w-md truncate">{o.notes || '—'}</td>
+                </tr>
+              ))}
+              {sorted.length === 0 && (
+                <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No outages recorded yet.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
   );
 }
-

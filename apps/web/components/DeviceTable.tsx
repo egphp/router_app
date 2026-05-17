@@ -7,6 +7,7 @@ import { formatBps, formatBytes, formatMacShort, categoryIcon, timeAgo } from '.
 import { usePersistedState } from '../lib/usePersistedState';
 import { useTableSort, sortNum, sortStr, type SortDir } from '../lib/useTableSort';
 import { clsx } from 'clsx';
+import { Trash2 } from 'lucide-react';
 
 interface DeviceRow {
   mac: string;
@@ -44,6 +45,7 @@ export function DeviceTable() {
   );
   const [filter, setFilter] = usePersistedState<Filter>('tenda.devices.filter', 'all');
   const [search, setSearch] = useState('');
+  const [deletingMac, setDeletingMac] = useState<string | null>(null);
 
   const devices = useMemo(() => {
     let list = data?.devices ?? [];
@@ -80,6 +82,27 @@ export function DeviceTable() {
       body: JSON.stringify({ is_new: 0 }),
     });
     mutate();
+  };
+
+  const removeDevice = async (device: DeviceRow) => {
+    const name = label(device);
+    const confirmed = window.confirm(
+      `Delete ${name} and its stored local traffic history?\n\nIf the router still sees this device, it can appear again on the next sample.`,
+    );
+    if (!confirmed) return;
+
+    setDeletingMac(device.mac);
+    try {
+      const response = await fetch(`/api/devices/${encodeURIComponent(device.mac)}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        window.alert(body?.error ?? 'Delete failed');
+        return;
+      }
+      await mutate();
+    } finally {
+      setDeletingMac(null);
+    }
   };
 
   // The "Now" header cycles through 3 sort states: down desc → up desc → (back to today)
@@ -181,12 +204,22 @@ export function DeviceTable() {
                 </div>
                 <div className="flex items-center gap-3 mt-2">
                   <span className="text-[10px] text-slate-500">{lastOnlineLabel(d)}</span>
-                  {d.is_new === 1 && (
-                    <button onClick={() => dismissNew(d.mac)}
-                      className="ml-auto text-[10px] px-2 py-1 rounded bg-accent-green/10 text-accent-green border border-accent-green/30">
-                      Mark known
+                  <div className="ml-auto flex items-center gap-2">
+                    {d.is_new === 1 && (
+                      <button onClick={() => dismissNew(d.mac)}
+                        className="text-[10px] px-2 py-1 rounded bg-accent-green/10 text-accent-green border border-accent-green/30">
+                        Mark known
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeDevice(d)}
+                      disabled={deletingMac === d.mac}
+                      className="text-[10px] px-2 py-1 rounded bg-accent-red/10 text-accent-red border border-accent-red/30 disabled:opacity-50 flex items-center gap-1"
+                    >
+                      <Trash2 size={11} /> Delete
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -266,12 +299,24 @@ export function DeviceTable() {
                   )}
                 </td>
                 <td className="px-4 py-2.5 text-right">
-                  {d.is_new === 1 && (
-                    <button onClick={() => dismissNew(d.mac)}
-                      className="text-xs px-2 py-1 rounded bg-accent-green/10 text-accent-green border border-accent-green/30 hover:bg-accent-green/20">
-                      Mark known
+                  <div className="flex items-center justify-end gap-2">
+                    {d.is_new === 1 && (
+                      <button onClick={() => dismissNew(d.mac)}
+                        className="text-xs px-2 py-1 rounded bg-accent-green/10 text-accent-green border border-accent-green/30 hover:bg-accent-green/20">
+                        Mark known
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeDevice(d)}
+                      disabled={deletingMac === d.mac}
+                      title="Delete device"
+                      aria-label={`Delete ${label(d)}`}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded border border-accent-red/30 bg-accent-red/10 text-accent-red hover:bg-accent-red/20 disabled:opacity-50"
+                    >
+                      <Trash2 size={14} />
                     </button>
-                  )}
+                  </div>
                 </td>
               </tr>
             ))}

@@ -27,7 +27,7 @@ const nav = [
 export function TopNav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const isSetup = pathname === '/setup';
+  const isSetup = pathname === '/setup' || pathname === '/login';
   const { data: status } = useSWR<{ connected: boolean; alerts: number }>(
     isSetup ? null : '/api/status', fetcher, { refreshInterval: 5000 }
   );
@@ -56,7 +56,7 @@ export function TopNav() {
             type="button"
             aria-label="Open menu"
             onClick={() => setOpen(true)}
-            className="xl:hidden p-2 -ml-2 rounded-xl hover:bg-bg-elevated/60 text-text-secondary shrink-0 transition"
+            className="2xl:hidden p-2 -ml-2 rounded-xl hover:bg-bg-elevated/60 text-text-secondary shrink-0 transition"
           >
             <Menu size={20} />
           </button>
@@ -78,7 +78,7 @@ export function TopNav() {
           </Link>
 
           {/* Desktop nav */}
-          <nav className="hidden xl:flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto scrollbar-thin ml-2">
+          <nav className="hidden 2xl:flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto scrollbar-thin ml-2">
             {nav.map((item) => {
               const active = isActive(item.href);
               const Icon = item.icon;
@@ -105,7 +105,7 @@ export function TopNav() {
               <Link
                 href="/alerts"
                 aria-label={`${alerts} active alerts`}
-                className="xl:hidden relative p-2 rounded-xl hover:bg-bg-elevated/60 text-text-secondary transition"
+                className="2xl:hidden relative p-2 rounded-xl hover:bg-bg-elevated/60 text-text-secondary transition"
               >
                 <Bell size={18} />
                 <span className="absolute -top-0.5 -right-0.5 text-[10px] rounded-full min-w-[16px] h-4 px-1 font-bold leading-4 text-center"
@@ -134,11 +134,11 @@ export function TopNav() {
       {open && (
         <>
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 xl:hidden"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 2xl:hidden"
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed inset-y-0 left-0 w-72 max-w-[85vw] z-50 xl:hidden overflow-y-auto animate-slide-up flex flex-col"
+          <aside className="fixed inset-y-0 left-0 w-72 max-w-[85vw] z-50 2xl:hidden overflow-y-auto animate-slide-up flex flex-col"
             style={{ background: 'var(--bg-card)', borderRight: '1.5px solid var(--border)' }}>
             <div className="flex items-center justify-between px-4 h-14 shrink-0" style={{ borderBottom: '1.5px solid var(--border)' }}>
               <div className="flex items-center gap-2.5">

@@ -23,6 +23,10 @@ function makeDb(): Database.Database {
       bytes_up INTEGER DEFAULT 0, avg_down_bps INTEGER, avg_up_bps INTEGER, peak_down_bps INTEGER,
       peak_up_bps INTEGER, active_sec INTEGER DEFAULT 0, sample_count INTEGER DEFAULT 0,
       PRIMARY KEY (mac, bucket_ts));
+    CREATE TABLE device_sessions (mac TEXT, started_at INTEGER NOT NULL, ended_at INTEGER,
+      bytes_down INTEGER DEFAULT 0, bytes_up INTEGER DEFAULT 0,
+      down_counter_base_kb INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (mac, started_at));
     CREATE TABLE alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, mac TEXT, payload TEXT,
       created_at INTEGER, dismissed_at INTEGER);
   `);
@@ -48,6 +52,10 @@ test('first sample for a device contributes 0 bytes (baseline)', () => {
   const r = acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_000 })], false);
   assert.equal(r.totalBytesDownDelta, 0, 'first sample = no delta');
   assert.equal(r.newDevices.length, 1);
+
+  const session = db.prepare(`SELECT bytes_down FROM device_sessions WHERE mac = ?`)
+    .get('AA:BB:CC:00:00:01') as { bytes_down: number };
+  assert.equal(session.bytes_down, 10_000 * 1024, 'session total follows router counter');
 });
 
 test('wifi metrics classify Tenda connection types and estimate RSSI distance', () => {
@@ -120,6 +128,98 @@ test('counter regression with a lower onlineTime is treated as a new device sess
   assert.equal(r.totalBytesDownDelta, 200 * 1024);
 });
 
+test('open device session is created and accumulates traffic', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_000, onlineTime: 2 })], false);
+  acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_100, onlineTime: 3 })], false);
+
+  const row = db.prepare(`SELECT started_at, ended_at, bytes_down FROM device_sessions WHERE mac = ?`)
+    .get('AA:BB:CC:00:00:01') as { started_at: number; ended_at: number | null; bytes_down: number };
+  assert.equal(row.started_at, 1_000_000 - 2 * 60_000);
+  assert.equal(row.ended_at, null);
+  assert.equal(row.bytes_down, 10_100 * 1024);
+});
+
+test('offline sample closes the open device session', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_000, onlineTime: 2 })], false);
+  acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_100, onlineTime: 3 })], false);
+  acc.process(1_060_000, [device('AA:BB:CC:00:00:01', { sumKb: 10_100, online: 0 })], false);
+
+  const row = db.prepare(`SELECT ended_at, bytes_down FROM device_sessions WHERE mac = ?`)
+    .get('AA:BB:CC:00:00:01') as { ended_at: number | null; bytes_down: number };
+  assert.equal(row.ended_at, 1_060_000);
+  assert.equal(row.bytes_down, 10_100 * 1024);
+});
+
+test('reconnect without router counter reset does not re-credit the cumulative counter', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  const mac = 'AA:BB:CC:00:00:01';
+  acc.process(1_000_000, [device(mac, { sumKb: 10_000, onlineTime: 10 })], false);
+  acc.process(1_030_000, [device(mac, { sumKb: 10_000, online: 0 })], false);
+  acc.process(1_060_000, [device(mac, { sumKb: 10_000, onlineTime: 1 })], false);
+  acc.process(1_090_000, [device(mac, { sumKb: 10_050, onlineTime: 2 })], false);
+
+  const rows = db.prepare(`SELECT bytes_down FROM device_sessions WHERE mac = ? ORDER BY started_at`)
+    .all(mac) as Array<{ bytes_down: number }>;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].bytes_down, 10_000 * 1024);
+  assert.equal(rows[1].bytes_down, 50 * 1024);
+});
+
+test('reconnect after an offline zero uses the previous high-water counter as baseline', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  const mac = 'AA:BB:CC:00:00:01';
+  acc.process(1_000_000, [device(mac, { sumKb: 10_000, onlineTime: 10 })], false);
+  acc.process(1_030_000, [device(mac, { sumKb: 0, online: 0 })], false);
+  acc.process(1_060_000, [device(mac, { sumKb: 10_000, onlineTime: 1 })], false);
+  acc.process(1_090_000, [device(mac, { sumKb: 10_050, onlineTime: 2 })], false);
+
+  const rows = db.prepare(`SELECT bytes_down, down_counter_base_kb FROM device_sessions WHERE mac = ? ORDER BY started_at`)
+    .all(mac) as Array<{ bytes_down: number; down_counter_base_kb: number }>;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].bytes_down, 10_000 * 1024);
+  assert.equal(rows[1].down_counter_base_kb, 10_000);
+  assert.equal(rows[1].bytes_down, 50 * 1024);
+});
+
+test('offline to online starts a new baseline even when onlineTime is unavailable', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  const mac = 'AA:BB:CC:00:00:01';
+  acc.process(1_000_000, [device(mac, { sumKb: 10_000 })], false);
+  acc.process(1_030_000, [device(mac, { sumKb: 0, online: 0 })], false);
+  acc.process(1_060_000, [device(mac, { sumKb: 10_000 })], false);
+  acc.process(1_090_000, [device(mac, { sumKb: 10_050 })], false);
+
+  const rows = db.prepare(`SELECT bytes_down, down_counter_base_kb FROM device_sessions WHERE mac = ? ORDER BY started_at`)
+    .all(mac) as Array<{ bytes_down: number; down_counter_base_kb: number }>;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].bytes_down, 10_000 * 1024);
+  assert.equal(rows[1].down_counter_base_kb, 10_000);
+  assert.equal(rows[1].bytes_down, 50 * 1024);
+});
+
+test('long gap in the same router session aligns session total to the cumulative counter without bucket delta', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  const mac = 'AA:BB:CC:00:00:01';
+  acc.process(1_000_000, [device(mac, { sumKb: 10_000, onlineTime: 10 })], false);
+  const r = acc.process(1_600_000, [device(mac, { sumKb: 16_000, onlineTime: 20 })], false);
+
+  const session = db.prepare(`SELECT bytes_down FROM device_sessions WHERE mac = ?`)
+    .get(mac) as { bytes_down: number };
+  const bucketBytes = db.prepare(`SELECT SUM(bytes_down) AS bd FROM traffic_5min WHERE mac = ?`)
+    .get(mac) as { bd: number };
+  assert.equal(r.totalBytesDownDelta, 0);
+  assert.equal(bucketBytes.bd, 0);
+  assert.equal(session.bytes_down, 16_000 * 1024);
+});
+
 test('flicker to 0: clamped to prev high-water mark, contributes 0 bytes', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
@@ -168,10 +268,38 @@ test('5-minute speed averages include every sample once', () => {
 test('new MAC inserts new_device alert', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
-  acc.process(1_000_000, [device('AA:BB:CC:00:00:99', { sumKb: 0, name: 'TestPhone' })], false);
+  acc.process(1_000_000, [device('AA:BB:CC:00:00:99', { sumKb: 0, name: 'iPhone' })], false);
   const alerts = db.prepare(`SELECT * FROM alerts WHERE kind = 'new_device'`).all();
   assert.equal(alerts.length, 1);
   assert.equal((alerts[0] as any).mac, 'AA:BB:CC:00:00:99');
+  const payload = JSON.parse((alerts[0] as any).payload);
+  assert.equal(payload.mac, 'AA:BB:CC:00:00:99');
+  assert.equal(payload.hostname, 'iPhone');
+  assert.equal(payload.ip, '192.168.0.10');
+  assert.equal(payload.category, 'phone');
+});
+
+test('deleted MAC is treated as new again on the next sample', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  const mac = 'AA:BB:CC:00:00:98';
+
+  const first = acc.process(1_000_000, [device(mac, { sumKb: 0, name: 'TestPhone' })], false);
+  assert.deepEqual(first.newDevices, [mac]);
+
+  db.exec(`
+    DELETE FROM alerts WHERE mac = '${mac}';
+    DELETE FROM samples_raw WHERE mac = '${mac}';
+    DELETE FROM traffic_5min WHERE mac = '${mac}';
+    DELETE FROM device_sessions WHERE mac = '${mac}';
+    DELETE FROM devices WHERE mac = '${mac}';
+  `);
+
+  const second = acc.process(1_030_000, [device(mac, { sumKb: 0, name: 'TestPhone' })], false);
+  assert.deepEqual(second.newDevices, [mac]);
+
+  const alerts = db.prepare(`SELECT * FROM alerts WHERE kind = 'new_device' AND mac = ?`).all(mac);
+  assert.equal(alerts.length, 1);
 });
 
 test('offline device contributes 0 upload (no integration when offline)', () => {

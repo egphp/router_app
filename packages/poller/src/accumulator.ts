@@ -1,12 +1,13 @@
 import type Database from 'better-sqlite3';
 import type { RouterDevice } from '@tenda/shared';
 import { bucket5Min } from '@tenda/shared';
-import { lookupOui, categorizeByName } from '@tenda/shared';
+import { insertAlertIfAllowed, lookupOui, categorizeByName } from '@tenda/shared';
 import { log } from './logger.js';
 import { extractWifiMetrics } from './wifi-metrics.js';
 
 interface PrevSample {
   ts: number;
+  online: 0 | 1;
   up_speed_bps: number;
   down_speed_bps: number;
   down_sum_kb: number;
@@ -25,6 +26,10 @@ export class Accumulator {
   private insertSample: Database.Statement;
   private lastSample: Database.Statement;
   private upsertBucket: Database.Statement;
+  private findOpenSession: Database.Statement;
+  private insertSession: Database.Statement;
+  private closeOpenSession: Database.Statement;
+  private addSessionBytes: Database.Statement;
   private fetchDevice: Database.Statement;
   private insertAlert: Database.Statement;
 
@@ -56,7 +61,7 @@ export class Accumulator {
     `);
 
     this.lastSample = db.prepare(`
-      SELECT ts, up_speed_bps, down_speed_bps, down_sum_kb, online_seconds
+      SELECT ts, online, up_speed_bps, down_speed_bps, down_sum_kb, online_seconds
       FROM samples_raw
       WHERE mac = ? AND ts < ?
       ORDER BY ts DESC
@@ -75,6 +80,34 @@ export class Accumulator {
         sample_count = sample_count + 1,
         avg_down_bps = (COALESCE(avg_down_bps, 0) * traffic_5min.sample_count + excluded.avg_down_bps) / (traffic_5min.sample_count + 1),
         avg_up_bps   = (COALESCE(avg_up_bps, 0)   * traffic_5min.sample_count + excluded.avg_up_bps)   / (traffic_5min.sample_count + 1)
+    `);
+
+    this.findOpenSession = db.prepare(`
+      SELECT started_at, down_counter_base_kb FROM device_sessions
+      WHERE mac = ? AND ended_at IS NULL
+      ORDER BY started_at DESC
+      LIMIT 1
+    `);
+
+    this.insertSession = db.prepare(`
+      INSERT INTO device_sessions (mac, started_at, ended_at, bytes_down, bytes_up, down_counter_base_kb)
+      VALUES (?, ?, NULL, 0, 0, ?)
+      ON CONFLICT(mac, started_at) DO UPDATE SET
+        ended_at = NULL,
+        down_counter_base_kb = excluded.down_counter_base_kb
+    `);
+
+    this.closeOpenSession = db.prepare(`
+      UPDATE device_sessions
+      SET ended_at = ?, bytes_down = bytes_down + ?, bytes_up = bytes_up + ?
+      WHERE mac = ? AND ended_at IS NULL
+    `);
+
+    this.addSessionBytes = db.prepare(`
+      UPDATE device_sessions
+      SET bytes_down = MAX(COALESCE(bytes_down, 0) + ?, ?),
+          bytes_up = COALESCE(bytes_up, 0) + ?
+      WHERE mac = ? AND ended_at IS NULL
     `);
 
     this.insertAlert = db.prepare(`
@@ -125,7 +158,7 @@ export class Accumulator {
         const downSpeed = Math.round(downKBs * 1024);
         const rawDownSumKb = Number(dev.hostDownloadSum ?? 0);
         const sessions = isOnline ? Number((dev as any).hostConnectCount ?? 0) : 0;
-        const onlineSec = isOnline ? Number((dev as any).onlineTime ?? 0) : 0;
+        const onlineMinutes = isOnline ? Number((dev as any).onlineTime ?? 0) : 0;
         const wifi = extractWifiMetrics(dev);
 
         const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
@@ -134,12 +167,14 @@ export class Accumulator {
         // the router may have rebooted, the device may have reconnected, or our poller
         // restarted. In all those cases the gap is too long to safely credit as one delta.
         const gapTooLarge = dtSec > 5 * 60;
-        const sessionRestarted = Boolean(
+        const reconnected = Boolean(prev && prev.online === 0 && isOnline);
+        const uptimeReset = Boolean(
           prev &&
-          onlineSec > 0 &&
+          onlineMinutes > 0 &&
           Number(prev.online_seconds ?? 0) > 0 &&
-          onlineSec < Number(prev.online_seconds ?? 0)
+          onlineMinutes < Number(prev.online_seconds ?? 0)
         );
+        const sessionRestarted = reconnected || uptimeReset;
 
         let downSumKb = rawDownSumKb;
         let counterNoise = false;
@@ -177,7 +212,7 @@ export class Accumulator {
             prevKb: prev.down_sum_kb,
             curKb: downSumKb,
             prevOnlineSec: prev.online_seconds,
-            curOnlineSec: onlineSec,
+            curOnlineSec: onlineMinutes,
           });
           deltaDownBytes = downSumKb * 1024;
         } else {
@@ -190,6 +225,10 @@ export class Accumulator {
             deltaDownBytes = rawDeltaKb * 1024;
           }
         }
+        const seedSessionFromCounter = !sessionRestarted || isReboot || realCounterReset;
+        const sessionCounterBaseKb = seedSessionFromCounter
+          ? 0
+          : Math.max(0, Number(prev?.down_sum_kb ?? downSumKb));
 
         // Upload bytes are estimated from instantaneous KB/s × elapsed time, because the
         // Tenda W30E firmware does not expose hostUploadSum. This undercounts bursts that
@@ -206,6 +245,18 @@ export class Accumulator {
           deltaUpBytes = 0;
         }
 
+        this.updateSession(
+          mac,
+          now,
+          isOnline,
+          onlineMinutes,
+          sessionRestarted,
+          deltaDownBytes,
+          deltaUpBytes,
+          downSumKb,
+          sessionCounterBaseKb,
+        );
+
         this.insertSample.run({
           mac,
           ts: now,
@@ -215,7 +266,7 @@ export class Accumulator {
           down_speed_bps: downSpeed,
           down_sum_kb: downSumKb,
           sessions,
-          online_seconds: onlineSec,
+          online_seconds: onlineMinutes,
           connect_type: wifi.connectType,
           connection_kind: wifi.connectionKind,
           wifi_band: wifi.wifiBand,
@@ -241,11 +292,18 @@ export class Accumulator {
         totalUp += deltaUpBytes;
 
         if (isNew) {
-          this.insertAlert.run('new_device', mac, JSON.stringify({
+          insertAlertIfAllowed(this.db, 'new_device', mac, {
+            mac,
             hostname: dev.hostName,
             ip: dev.hostIP,
             vendor: oui.vendor,
-          }), now);
+            category: guessedCategory,
+            router_id: dev.ID,
+            router_remark: dev.hostRemark || null,
+            connect_type: wifi.connectType,
+            connection_kind: wifi.connectionKind,
+            wifi_band: wifi.wifiBand,
+          }, now);
         }
       }
     });
@@ -259,4 +317,47 @@ export class Accumulator {
       deviceCount: devices.length,
     };
   }
+
+  private updateSession(
+    mac: string,
+    now: number,
+    isOnline: boolean,
+    onlineMinutes: number,
+    sessionRestarted: boolean,
+    bytesDown: number,
+    bytesUp: number,
+    downSumKb: number,
+    sessionCounterBaseKb: number,
+  ): void {
+    let open = this.findOpenSession.get(mac) as { started_at: number; down_counter_base_kb: number | null } | undefined;
+    if (!isOnline) {
+      if (open) this.closeOpenSession.run(now, 0, 0, mac);
+      return;
+    }
+
+    if (open && sessionRestarted) {
+      this.closeOpenSession.run(now, 0, 0, mac);
+      open = undefined;
+    }
+
+    if (!open) {
+      const baseKb = Math.max(0, sessionCounterBaseKb);
+      const startedAt = inferSessionStart(now, onlineMinutes);
+      this.insertSession.run(mac, startedAt, baseKb);
+      open = { started_at: startedAt, down_counter_base_kb: baseKb };
+    }
+    const counterBaseKb = Math.max(0, Number(open.down_counter_base_kb ?? 0));
+    const counterSessionBytes = Math.max(0, (downSumKb - counterBaseKb) * 1024);
+    this.addSessionBytes.run(
+      Math.max(0, bytesDown),
+      Math.max(0, counterSessionBytes),
+      Math.max(0, bytesUp),
+      mac,
+    );
+  }
+}
+
+function inferSessionStart(now: number, onlineMinutes: number): number {
+  const minutes = Number.isFinite(onlineMinutes) && onlineMinutes > 0 ? onlineMinutes : 0;
+  return now - Math.round(minutes * 60_000);
 }

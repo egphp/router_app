@@ -95,7 +95,28 @@ export default function AttacksPage() {
           <h2 className="font-semibold mb-3 flex items-center gap-2">
             <AlertOctagon size={16} className="text-accent-red" /> Top attackers (all time)
           </h2>
-          <div className="overflow-x-auto">
+          <div className="space-y-2 sm:hidden">
+            {sortedAttackers.map((a) => (
+              <div key={`${a.mac}-${a.attack_kind}`} className="rounded-md border border-bg-border bg-bg-elevated/35 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    {a.mac ? (
+                      <Link href={`/devices/${encodeURIComponent(a.mac)}`}
+                        className="font-medium hover:text-accent break-words">{a.label}</Link>
+                    ) : <span className="text-slate-500">unknown</span>}
+                    <div className="text-[10px] text-slate-500 break-all">{a.ip} · {a.mac && formatMacShort(a.mac)}</div>
+                  </div>
+                  <span className="shrink-0 text-xs px-2 py-0.5 rounded bg-accent-red/20 text-accent-red">{a.attack_kind}</span>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                  <AttackMetric label="Events" value={String(a.event_count)} />
+                  <AttackMetric label="Total" value={String(a.total_attacks)} tone="red" />
+                  <AttackMetric label="Latest" value={timeAgo(a.latest_ts)} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-xs uppercase tracking-wide text-slate-500">
                 <tr>
@@ -131,8 +152,8 @@ export default function AttacksPage() {
       )}
 
       <div className="card p-5 animate-fade-in">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-xs text-slate-500">Filter:</span>
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:flex sm:items-center">
+          <span className="col-span-2 text-xs text-slate-500 sm:col-span-1">Filter:</span>
           {[
             { v: 2, label: 'Attacks', tone: 'bg-accent-red/20 text-accent-red' },
             { v: 1, label: 'System', tone: 'bg-slate-700/30 text-slate-400' },
@@ -140,7 +161,7 @@ export default function AttacksPage() {
             { v: null, label: 'All', tone: 'bg-bg-elevated text-slate-200' },
           ].map((t) => (
             <button key={String(t.v)} onClick={() => setFilter(t.v)}
-              className={`px-3 py-1 rounded text-xs ${filter === t.v ? 'bg-accent text-white' : t.tone}`}>
+              className={`rounded px-3 py-1 text-xs ${filter === t.v ? 'bg-accent text-white' : t.tone}`}>
               {t.label}
             </button>
           ))}
@@ -149,8 +170,39 @@ export default function AttacksPage() {
         {entries.length === 0 ? (
           <div className="text-sm text-slate-500 text-center py-6">No entries.</div>
         ) : (
-          <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-            <table className="w-full text-xs font-mono">
+          <>
+            <div className="space-y-2 sm:hidden max-h-[600px] overflow-y-auto">
+              {sortedEntries.map((e) => {
+                const t = LOG_TYPES[e.log_type] ?? { label: '?', color: 'text-slate-500' };
+                return (
+                  <div key={e.router_id} className="rounded-md border border-bg-border bg-bg-elevated/35 p-3 font-mono text-xs">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="text-slate-400">{new Date(e.ts).toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
+                      <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] ${t.color}`}>{e.attack_kind || t.label}</span>
+                    </div>
+                    <div className="mt-2">
+                      {e.attacker_mac ? (
+                        <Link href={`/devices/${encodeURIComponent(e.attacker_mac)}`}
+                          className="hover:text-accent text-slate-200 break-words">
+                          {e.device_label || e.attacker_mac}
+                          <span className="text-slate-500"> ({e.attacker_ip})</span>
+                        </Link>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
+                    </div>
+                    <div className="mt-2 grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+                      <div className="text-slate-500">Count</div>
+                      <div className="font-bold text-accent-red tabular-nums">{e.attack_count ?? '-'}</div>
+                      <div className="text-slate-500">Message</div>
+                      <div className="break-words text-slate-300">{e.message}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="hidden sm:block overflow-x-auto max-h-[600px] overflow-y-auto">
+              <table className="w-full text-xs font-mono">
               <thead className="bg-bg-card/60 sticky top-0 text-slate-500">
                 <tr>
                   <SortHeader label="Time" k="time" sort={entrySort.sort} onSort={entrySort.onSort} indicator={entrySort.indicator} align="left" className="px-3 py-1.5 whitespace-nowrap" />
@@ -188,10 +240,20 @@ export default function AttacksPage() {
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+function AttackMetric({ label, value, tone }: { label: string; value: string; tone?: 'red' }) {
+  return (
+    <div className="rounded-md border border-bg-border bg-bg-elevated/70 px-2 py-2 min-w-0">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`mt-0.5 font-semibold tabular-nums break-words ${tone === 'red' ? 'text-accent-red' : 'text-slate-200'}`}>{value}</div>
     </div>
   );
 }

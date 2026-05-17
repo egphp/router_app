@@ -135,8 +135,8 @@ export function NetworkMap() {
         <span><span className="inline-block w-2 h-2 rounded-full bg-accent-green mr-1" />active</span>
         <span><span className="inline-block w-4 h-px bg-slate-500 align-middle mr-1" />rings = estimated meters</span>
       </div>
-      <div className="flex justify-center overflow-x-auto rounded-xl bg-slate-950/10">
-        <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="w-[min(940px,calc(100vh-230px),100%)] min-w-[720px]">
+      <div className="flex justify-center overflow-hidden rounded-xl bg-slate-950/10">
+        <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="w-full max-w-[940px] h-auto sm:max-h-[calc(100vh-230px)]">
           {/* Concentric rings */}
           {[6, 18, 27, 36].map((m) => (
             <g key={m}>

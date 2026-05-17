@@ -21,13 +21,32 @@ const OUI_DB: Record<string, { vendor: string; category: string }> = {
   'FC:3C:D7': { vendor: 'Murata', category: 'iot' },
   '6C:70:CB': { vendor: 'Samsung Electronics', category: 'phone' },
   '48:E1:5C': { vendor: 'Espressif', category: 'iot' },
-  'DC:CD:2F': { vendor: 'EPSON', category: 'iot' },
+  'DC:CD:2F': { vendor: 'EPSON', category: 'printer' },
   'AC:15:18': { vendor: 'Espressif', category: 'iot' },
   '42:86:79': { vendor: 'Apple (random)', category: 'phone' },
   'B6:48:C0': { vendor: 'Apple (random)', category: 'phone' },
   'B8:D4:54': { vendor: 'Tenda', category: 'router' },
   '3C:A9:AB': { vendor: 'Apple', category: 'computer' },
 };
+
+export const DEVICE_CATEGORIES = [
+  'phone',
+  'tablet',
+  'computer',
+  'tv',
+  'watch',
+  'camera',
+  'game_console',
+  'router',
+  'access_point',
+  'nas',
+  'streaming',
+  'speaker',
+  'smart_home',
+  'printer',
+  'iot',
+  'unknown',
+] as const;
 
 export interface OuiInfo {
   vendor: string;
@@ -48,15 +67,30 @@ export function lookupOui(mac: string): OuiInfo {
 
 export function categorizeByName(hostname: string | null | undefined): string | null {
   if (!hostname) return null;
-  const h = hostname.toLowerCase();
-  if (h.includes('iphone')) return 'phone';
-  if (h.includes('ipad')) return 'tablet';
-  if (h.includes('watch')) return 'watch';
+  const h = normalizeName(hostname);
+  if (hasAny(h, ['iphone', 'android phone', 'galaxy s', 'redmi', 'xiaomi', 'oneplus', 'oppo', 'vivo', 'huawei', 'honor', 'realme', 'pixel', 'poco', 'infinix', 'tecno'])) return 'phone';
+  if (hasAny(h, ['ipad', 'tablet', 'galaxy tab', 'tab s', 'tab a', 'lenovo tab', 'mi pad', 'kindle'])) return 'tablet';
+  if (hasAny(h, ['watch', 'apple watch', 'galaxy watch', 'fitbit', 'amazfit', 'mi band'])) return 'watch';
+  if (hasAny(h, ['playstation', 'ps5', 'ps4', 'xbox', 'nintendo', 'switch', 'steam deck'])) return 'game_console';
+  if (hasAny(h, ['camera', 'ipcam', 'ip cam', 'cctv', 'dahua', 'hikvision', 'ezviz', 'imou', 'reolink', 'tapo cam', 'yi cam', 'wyze', 'arlo', 'ring cam', 'eufycam', 'nest cam'])) return 'camera';
+  if (hasAny(h, ['access point', 'access-point', 'ap ', ' ap-', 'eap', 'omada', 'unifi ap', 'ubiquiti', 'mesh', 'deco', 'repeater', 'extender', 'wap'])) return 'access_point';
+  if (hasAny(h, ['router', 'gateway', 'modem', 'tenda', 'tp-link', 'tplink', 'archer', 'mikrotik', 'asusrouter', 'keenetic', 'openwrt'])) return 'router';
+  if (hasAny(h, ['synology', 'qnap', 'truenas', 'freenas', 'nas', 'wdmycloud', 'wd my cloud', 'mycloud'])) return 'nas';
+  if (hasAny(h, ['chromecast', 'google tv', 'fire tv', 'firetv', 'roku', 'apple tv', 'appletv', 'android tv', 'mi box', 'nvidia shield'])) return 'streaming';
+  if (hasAny(h, ['sonos', 'homepod', 'echo', 'alexa', 'google home', 'nest mini', 'nest audio', 'bose', 'jbl', 'speaker', 'soundbar'])) return 'speaker';
+  if (hasAny(h, ['tizen', 'webos', 'lg tv', 'lgwebostv', 'samsung tv', 'bravia', 'sony tv', 'androidtv', 'smart tv', '-tv', ' tv'])) return 'tv';
+  if (hasAny(h, ['epson', 'hp printer', 'hp-', 'laserjet', 'officejet', 'canon', 'brother', 'printer', 'mfp', 'pixma'])) return 'printer';
+  if (hasAny(h, ['macbook', 'imac', 'mac mini', 'macstudio', 'mac studio', 'windows', 'thinkpad', 'surface', 'laptop', 'desktop', 'pc-', 'pc ', 'workstation'])) return 'computer';
   if (h.includes('mac') && !h.includes('mac-address')) return 'computer';
-  if (h.includes('redmi') || h.includes('samsung') || h.includes('xiaomi') || h.includes('oneplus')) return 'phone';
-  if (h.includes('tizen') || h.includes('-tv')) return 'tv';
-  if (h.includes('espressif') || h.includes('esp_') || h.includes('bouffalo')) return 'iot';
-  if (h.includes('epson') || h.includes('hp-') || h.includes('canon')) return 'printer';
-  if (h.includes('bedroom') || h.includes('living') || h.includes('reception')) return 'iot';
+  if (hasAny(h, ['smart plug', 'smartplug', 'plug', 'bulb', 'lamp', 'tuya', 'shelly', 'switchbot', 'thermostat', 'vacuum', 'roomba', 'lock', 'doorbell', 'bedroom', 'living', 'reception'])) return 'smart_home';
+  if (hasAny(h, ['espressif', 'esp_', 'esp-', 'esp32', 'esp8266', 'bouffalo', 'iot'])) return 'iot';
   return null;
+}
+
+function normalizeName(value: string): string {
+  return value.toLowerCase().replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function hasAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
 }

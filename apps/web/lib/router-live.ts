@@ -17,6 +17,7 @@ export interface RouterLiveDevice {
   online: 0 | 1;
   up_speed_bps: number;
   down_speed_bps: number;
+  down_sum_kb: number;
   connect_type: number | null;
   online_seconds: number | null;
 }
@@ -27,6 +28,7 @@ export interface RouterLiveSnapshot {
   devices: RouterLiveDevice[];
   all_devices_down_bps: number;
   all_devices_up_bps: number;
+  counter_down_bps: number;
   wan_down_bps: number;
   wan_up_bps: number;
   best_down_bps: number;
@@ -98,6 +100,7 @@ export function mergeRouterLiveDevice<T extends {
 class RouterLiveClient {
   private cookie: string | null = null;
   private inFlightLogin: Promise<void> | null = null;
+  private previousCounters = new Map<string, { ts: number; down_sum_kb: number; online_seconds: number | null }>();
 
   constructor(private readonly host: string, private readonly password: string) {}
 
@@ -120,6 +123,7 @@ class RouterLiveClient {
     const devices = normalizeDevices(res.getQosUserList);
     const allDown = devices.reduce((sum, d) => sum + d.down_speed_bps, 0);
     const allUp = devices.reduce((sum, d) => sum + d.up_speed_bps, 0);
+    const counterDown = this.counterDownBps(ts, devices);
 
     return {
       ts,
@@ -127,11 +131,54 @@ class RouterLiveClient {
       devices,
       all_devices_down_bps: allDown,
       all_devices_up_bps: allUp,
+      counter_down_bps: counterDown,
       wan_down_bps: wanDown,
       wan_up_bps: wanUp,
-      best_down_bps: Math.max(wanDown, allDown),
+      best_down_bps: Math.max(wanDown, allDown, counterDown),
       best_up_bps: Math.max(wanUp, allUp),
     };
+  }
+
+  private counterDownBps(ts: number, devices: RouterLiveDevice[]): number {
+    let total = 0;
+    const seen = new Set<string>();
+    for (const device of devices) {
+      seen.add(device.mac);
+      const prev = this.previousCounters.get(device.mac);
+      if (prev) {
+        const dtMs = ts - prev.ts;
+        const gapTooLarge = dtMs <= 0 || dtMs > 5 * 60_000;
+        const sessionRestarted = Boolean(
+          device.online_seconds !== null &&
+          prev.online_seconds !== null &&
+          device.online_seconds > 0 &&
+          prev.online_seconds > 0 &&
+          device.online_seconds < prev.online_seconds
+        );
+
+        let deltaKb = 0;
+        if (!gapTooLarge) {
+          if (device.down_sum_kb >= prev.down_sum_kb) {
+            deltaKb = device.down_sum_kb - prev.down_sum_kb;
+          } else if (sessionRestarted) {
+            deltaKb = device.down_sum_kb;
+          }
+        }
+
+        if (deltaKb > 0 && deltaKb <= 5 * 1024 * 1024) {
+          total += Math.round((deltaKb * 1024 * 1000) / dtMs);
+        }
+      }
+      this.previousCounters.set(device.mac, {
+        ts,
+        down_sum_kb: device.down_sum_kb,
+        online_seconds: device.online_seconds,
+      });
+    }
+    for (const mac of this.previousCounters.keys()) {
+      if (!seen.has(mac)) this.previousCounters.delete(mac);
+    }
+    return total;
   }
 
   private get baseUrl(): string {
@@ -228,6 +275,7 @@ function normalizeDevices(rows: Array<Record<string, unknown>> | undefined): Rou
       online: 1 as const,
       up_speed_bps: speedKbToBps(row.hostUploadSpeed),
       down_speed_bps: speedKbToBps(row.hostDownloadSpeed),
+      down_sum_kb: Math.max(0, Math.round(Number(row.hostDownloadSum ?? 0))),
       connect_type: finiteNumber(row.hostConnectType),
       online_seconds: finiteNumber(row.onlineTime) === null ? null : finiteNumber(row.onlineTime)! * 60,
     }))

@@ -1,21 +1,24 @@
 'use client';
-import { useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
 import { formatBytes, categoryIcon } from '../lib/format';
+import { usePersistedState } from '../lib/usePersistedState';
 
 interface Talker { mac: string; label: string; category: string | null; vendor: string | null; ip: string | null; bytes_down: number; bytes_up: number }
 
 const RANGES = [
+  { value: 'all', label: 'All-time' },
   { value: 'hour', label: '1h' },
   { value: 'today', label: 'Today' },
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
-];
+] as const;
+
+type TalkerRange = typeof RANGES[number]['value'];
 
 export function TopTalkers() {
-  const [range, setRange] = useState<'hour' | 'today' | 'week' | 'month'>('today');
+  const [range, setRange] = usePersistedState<TalkerRange>('tenda.topTalkers.range', 'all');
   const { data } = useSWR<{ data: Talker[] }>(`/api/analytics?kind=top&range=${range}&limit=10`, fetcher, { refreshInterval: 30000 });
   const list = data?.data ?? [];
   const max = Math.max(1, ...list.map((t) => t.bytes_down + t.bytes_up));
@@ -34,11 +37,13 @@ export function TopTalkers() {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
           <div className="stat-label">Top talkers</div>
-          <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>Devices ranked by total bytes</div>
+          <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+            {range === 'all' ? 'Devices ranked by summed router sessions' : 'Devices ranked by bytes in this window'}
+          </div>
         </div>
         <div className="flex rounded-pill p-0.5 text-xs" style={{ background: 'oklch(0.20 0.04 275 / 0.6)', border: '1.5px solid var(--border)' }}>
           {RANGES.map((r) => (
-            <button key={r.value} onClick={() => setRange(r.value as any)}
+            <button key={r.value} onClick={() => setRange(r.value)}
               className="px-3 py-1 rounded-pill transition font-medium"
               style={range === r.value
                 ? { background: 'linear-gradient(135deg, var(--peach), var(--sun))', color: 'oklch(0.20 0.04 275)' }

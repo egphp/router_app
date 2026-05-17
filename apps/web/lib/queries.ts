@@ -65,7 +65,12 @@ export function getLatestDevices(): DeviceRow[] {
       GROUP BY mac
     ),
     today AS (${todayBytes.sql}),
-    alltime AS (${allBytes.sql})
+    alltime AS (${allBytes.sql}),
+    sessions AS (
+      SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
+      FROM device_sessions
+      GROUP BY mac
+    )
     SELECT d.mac, d.hostname, d.router_remark, d.custom_label, d.vendor, d.category,
            d.is_new, d.last_seen, d.first_seen,
            lo.last_online_at,
@@ -74,14 +79,15 @@ export function getLatestDevices(): DeviceRow[] {
            s.wifi_distance_m, s.wifi_distance_source,
            COALESCE(td.bd, 0) AS bytes_today,
            COALESCE(td.bu, 0) AS bytes_up_today,
-           COALESCE(at.bd, 0) AS bytes_total,
-           COALESCE(at.bu, 0) AS bytes_up_total
+           MAX(COALESCE(ses.bd, 0), COALESCE(at.bd, 0)) AS bytes_total,
+           MAX(COALESCE(ses.bu, 0), COALESCE(at.bu, 0)) AS bytes_up_total
     FROM devices d
     LEFT JOIN latest l ON l.mac = d.mac
     LEFT JOIN samples_raw s ON s.mac = d.mac AND s.ts = l.ts
     LEFT JOIN last_online lo ON lo.mac = d.mac
     LEFT JOIN today td ON td.mac = d.mac
     LEFT JOIN alltime at ON at.mac = d.mac
+    LEFT JOIN sessions ses ON ses.mac = d.mac
     ORDER BY bytes_today DESC, d.last_seen DESC
   `).all(...todayBytes.params, ...allBytes.params) as DeviceRow[];
   return rows.map((r) => ({
@@ -440,6 +446,62 @@ export function updateDevice(mac: string, fields: { custom_label?: string | null
   db().prepare(`UPDATE devices SET ${setClauses.join(', ')}, updated_at = @now WHERE mac = @mac`).run(values);
 }
 
+export interface DeleteDeviceResult {
+  existed: boolean;
+  changes: Record<string, number>;
+}
+
+export function deleteDevice(mac: string): DeleteDeviceResult {
+  const conn = db();
+  const macUp = mac.toUpperCase();
+  const deleteByMac = [
+    ['samples_raw', 'mac'],
+    ['traffic_5min', 'mac'],
+    ['traffic_hour', 'mac'],
+    ['traffic_day', 'mac'],
+    ['traffic_month', 'mac'],
+    ['device_sessions', 'mac'],
+    ['device_quotas', 'mac'],
+    ['device_enrichment', 'mac'],
+    ['alerts', 'mac'],
+    ['router_syslog', 'attacker_mac'],
+    ['nsfw_hits', 'source_mac'],
+    ['nsfw_push_events', 'source_mac'],
+    ['device_notification_thresholds', 'mac'],
+    ['notification_suppressions', 'mac'],
+    ['devices', 'mac'],
+  ] as const;
+
+  return conn.transaction(() => {
+    const existing = conn.prepare(`SELECT mac FROM devices WHERE mac = ?`).get(macUp) as { mac: string } | undefined;
+    if (!existing) return { existed: false, changes: {} };
+
+    const changes: Record<string, number> = {};
+    for (const [table, column] of deleteByMac) {
+      changes[table] = deleteWhereIfColumnExists(conn, table, column, macUp);
+    }
+    changes.router_log = deleteWhereTextContainsIfColumnExists(conn, 'router_log', 'message', macUp);
+    changes.notification_state = deleteWhereTextContainsIfColumnExists(conn, 'notification_state', 'state_key', macUp);
+    return { existed: true, changes };
+  })();
+}
+
+function deleteWhereIfColumnExists(conn: ReturnType<typeof db>, table: string, column: string, value: string): number {
+  const tableRow = conn.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) as { name: string } | undefined;
+  if (!tableRow) return 0;
+  const columns = conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === column)) return 0;
+  return Number(conn.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).run(value).changes ?? 0);
+}
+
+function deleteWhereTextContainsIfColumnExists(conn: ReturnType<typeof db>, table: string, column: string, value: string): number {
+  const tableRow = conn.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) as { name: string } | undefined;
+  if (!tableRow) return 0;
+  const columns = conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === column)) return 0;
+  return Number(conn.prepare(`DELETE FROM ${table} WHERE ${column} LIKE ?`).run(`%${value}%`).changes ?? 0);
+}
+
 export function getDevice(mac: string) {
   return db().prepare(`
     SELECT d.*,
@@ -565,7 +627,34 @@ function trafficRowsSinceSql(since: number, mac?: string): { sql: string; params
   return { sql: parts.join(' UNION ALL '), params };
 }
 
-export function getTopTalkers(range: 'hour' | 'today' | 'week' | 'month' = 'today', limit = 10) {
+export type TopTalkersRange = 'all' | 'hour' | 'today' | 'week' | 'month';
+
+export function getTopTalkers(range: TopTalkersRange = 'all', limit = 10) {
+  if (range === 'all') {
+    const allBytes = bytesSinceSql(0);
+    return db().prepare(`
+      WITH rollups AS (${allBytes.sql}),
+      sessions AS (
+        SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
+        FROM device_sessions
+        GROUP BY mac
+      )
+      SELECT d.mac, COALESCE(d.custom_label, d.router_remark, d.hostname, d.mac) AS label,
+             d.category, d.vendor,
+             (SELECT ip FROM samples_raw WHERE mac = d.mac ORDER BY ts DESC LIMIT 1) AS ip,
+             MAX(COALESCE(s.bd, 0), COALESCE(r.bd, 0)) AS bytes_down,
+             MAX(COALESCE(s.bu, 0), COALESCE(r.bu, 0)) AS bytes_up
+      FROM devices d
+      LEFT JOIN rollups r ON r.mac = d.mac
+      LEFT JOIN sessions s ON s.mac = d.mac
+      ORDER BY (
+        MAX(COALESCE(s.bd, 0), COALESCE(r.bd, 0)) +
+        MAX(COALESCE(s.bu, 0), COALESCE(r.bu, 0))
+      ) DESC
+      LIMIT ?
+    `).all(...allBytes.params, limit);
+  }
+
   const now = Date.now();
   let since: number;
   switch (range) {
@@ -682,6 +771,12 @@ export function getConsumption(): Array<{
   const month = bytesAggregate(startOfMonth);
   const year = bytesAggregate(startOfYear);
   const all = bytesAggregate(0);
+  const sessions = db().prepare(`
+    SELECT mac, SUM(bytes_down) AS bd, SUM(bytes_up) AS bu
+    FROM device_sessions
+    GROUP BY mac
+  `).all() as Array<{ mac: string; bd: number; bu: number }>;
+  const sessionByMac = new Map(sessions.map((r) => [r.mac, { bd: Number(r.bd ?? 0), bu: Number(r.bu ?? 0) }]));
 
   const devices = db().prepare(`
     SELECT d.mac, COALESCE(d.custom_label, d.router_remark, d.hostname, d.mac) AS label,
@@ -711,8 +806,8 @@ export function getConsumption(): Array<{
     month_up: month.byMac.get(d.mac)?.bu ?? 0,
     year_down: year.byMac.get(d.mac)?.bd ?? 0,
     year_up: year.byMac.get(d.mac)?.bu ?? 0,
-    total_down: all.byMac.get(d.mac)?.bd ?? 0,
-    total_up: all.byMac.get(d.mac)?.bu ?? 0,
+    total_down: Math.max(all.byMac.get(d.mac)?.bd ?? 0, sessionByMac.get(d.mac)?.bd ?? 0),
+    total_up: Math.max(all.byMac.get(d.mac)?.bu ?? 0, sessionByMac.get(d.mac)?.bu ?? 0),
   })).sort((a, b) => (b.total_down + b.total_up) - (a.total_down + a.total_up));
 }
 
@@ -897,11 +992,16 @@ export function getDeviceDailyUsage(mac: string, days = 30): Array<{
 export function getDeviceStats(mac: string) {
   const c = db();
   const allBytes = bytesSinceSql(0);
-  const totals = c.prepare(`
+  const rollupTotals = c.prepare(`
     SELECT COALESCE(bd, 0) AS bytes_down, COALESCE(bu, 0) AS bytes_up
     FROM (${allBytes.sql})
     WHERE mac = ?
   `).get(...allBytes.params, mac) as { bytes_down: number; bytes_up: number } | undefined;
+  const sessionTotals = c.prepare(`
+    SELECT COALESCE(SUM(bytes_down), 0) AS bytes_down, COALESCE(SUM(bytes_up), 0) AS bytes_up
+    FROM device_sessions
+    WHERE mac = ?
+  `).get(mac) as { bytes_down: number; bytes_up: number } | undefined;
 
   const peaks = c.prepare(`
     SELECT MAX(down_speed_bps) AS peak_down, MAX(up_speed_bps) AS peak_up
@@ -909,8 +1009,8 @@ export function getDeviceStats(mac: string) {
   `).get(mac) as { peak_down: number; peak_up: number } | undefined;
 
   return {
-    bytes_down: Number(totals?.bytes_down ?? 0),
-    bytes_up: Number(totals?.bytes_up ?? 0),
+    bytes_down: Math.max(Number(rollupTotals?.bytes_down ?? 0), Number(sessionTotals?.bytes_down ?? 0)),
+    bytes_up: Math.max(Number(rollupTotals?.bytes_up ?? 0), Number(sessionTotals?.bytes_up ?? 0)),
     peak_down_bps: peaks?.peak_down ?? 0,
     peak_up_bps: peaks?.peak_up ?? 0,
   };

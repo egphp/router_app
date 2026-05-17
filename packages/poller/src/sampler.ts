@@ -8,7 +8,8 @@ import { IpcBroadcaster } from './ipc.js';
 import { SecurityScanner } from './security.js';
 import { SystemLogPuller } from './system-log-puller.js';
 import { NsfwScanner } from './nsfw-scanner.js';
-import { parseRouterUptime, MIN } from '@tenda/shared';
+import { ThresholdAlertMonitor } from './threshold-alerts.js';
+import { parseRouterUptime, MIN, sendNewDevicePush, sendNsfwPush, sendSecurityPush, lookupOui, categorizeByName } from '@tenda/shared';
 import { log } from './logger.js';
 
 export interface RouterTelemetry {
@@ -29,6 +30,7 @@ export class Sampler {
   private security: SecurityScanner;
   private logPuller: SystemLogPuller;
   private nsfw: NsfwScanner;
+  private thresholds: ThresholdAlertMonitor;
   private telemetry: RouterTelemetry | null = null;
 
   private insertRouterState: Database.Statement;
@@ -46,6 +48,7 @@ export class Sampler {
     this.security = new SecurityScanner(db);
     this.logPuller = new SystemLogPuller(db, router);
     this.nsfw = new NsfwScanner(db);
+    this.thresholds = new ThresholdAlertMonitor(db);
     this.insertRouterState = db.prepare(`
       INSERT OR REPLACE INTO router_state (ts, uptime_sec, is_reboot, online_count) VALUES (?, ?, ?, ?)
     `);
@@ -104,18 +107,33 @@ export class Sampler {
       const wanResult = this.wanAccumulator.process(now, wanFlux);
 
       // NSFW URL detection (cheap; only scans new syslog rows since last tick).
-      this.nsfw.scan(now);
+      const nsfwResult = this.nsfw.scan(now);
+      if (nsfwResult.pushCandidates.length > 0) {
+        void this.sendNsfwNotifications(nsfwResult.pushCandidates).catch((e) => {
+          log.warn('nsfw push notification failed', String(e));
+        });
+      }
 
       // Security checks every cycle (with internal dedupe).
       const sec = this.security.scan(now, devices);
       if (sec.length > 0) {
         log.warn('security checks fired', { count: sec.length, rules: [...new Set(sec.map(s => s.rule))] });
+        void this.sendSecurityNotifications(sec).catch((e) => {
+          log.warn('security push notification failed', String(e));
+        });
       }
+
+      void this.thresholds.scan(now).catch((e) => {
+        log.warn('threshold notification scan failed', String(e));
+      });
 
       this.outage.recordSuccess(now);
       this.ipc.broadcast({ type: 'samples-updated', ts: now, deviceCount: result.deviceCount });
       if (result.newDevices.length > 0) {
         log.info('new devices detected', { macs: result.newDevices });
+        void this.sendNewDeviceNotifications(result.newDevices, devices).catch((e) => {
+          log.warn('new-device push notification failed', String(e));
+        });
       }
 
       // Extended telemetry: pull CPU/RAM + WAN flow opportunistically (every cycle).
@@ -162,4 +180,52 @@ export class Sampler {
       log.error('rollup failed', String(e));
     }
   }
+
+  private async sendNewDeviceNotifications(newMacs: string[], devices: Array<{ hostMAC?: string; hostName?: string; hostIP?: string }>): Promise<void> {
+    const byMac = new Map<string, { hostMAC?: string; hostName?: string; hostIP?: string }>();
+    for (const device of devices) {
+      const mac = normalizeMac(device.hostMAC);
+      if (mac) byMac.set(mac, device);
+    }
+    for (const mac of newMacs) {
+      const normalized = normalizeMac(mac);
+      if (!normalized) continue;
+      const device = byMac.get(normalized);
+      const oui = lookupOui(normalized);
+      const result = await sendNewDevicePush(this.db, {
+        mac: normalized,
+        hostname: device?.hostName ?? null,
+        ip: device?.hostIP ?? null,
+        vendor: oui.vendor,
+        category: categorizeByName(device?.hostName) ?? oui.category ?? null,
+      });
+      log.info('new-device push result', { mac: normalized, ...result });
+    }
+  }
+
+  private async sendNsfwNotifications(hits: Array<{ mac: string | null; ip: string | null; domain: string; category: string }>): Promise<void> {
+    for (const hit of hits) {
+      const result = await sendNsfwPush(this.db, hit);
+      log.warn('nsfw push result', { mac: hit.mac, ip: hit.ip, domain: hit.domain, ...result });
+    }
+  }
+
+  private async sendSecurityNotifications(checks: Array<{ rule: string; severity: string; mac: string | null; message: string; detail?: any }>): Promise<void> {
+    for (const check of checks) {
+      const result = await sendSecurityPush(this.db, {
+        rule: check.rule,
+        severity: check.severity,
+        mac: check.mac,
+        message: check.message,
+        ip: check.detail?.ip ?? null,
+      });
+      log.warn('security push result', { rule: check.rule, mac: check.mac, ...result });
+    }
+  }
+}
+
+function normalizeMac(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const mac = value.trim().toUpperCase();
+  return /^[0-9A-F]{2}(?::[0-9A-F]{2}){5}$/.test(mac) ? mac : '';
 }

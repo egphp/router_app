@@ -13,6 +13,7 @@ interface RawSample {
 
 interface PrevSample {
   ts: number;
+  online: 0 | 1;
   up_speed_bps: number;
   down_sum_kb: number;
   online_seconds: number | null;
@@ -31,11 +32,21 @@ interface BucketAccum {
   peak_up_bps: number;
 }
 
+interface SessionAccum {
+  mac: string;
+  started_at: number;
+  ended_at: number | null;
+  bytes_down: number;
+  bytes_up: number;
+  down_counter_base_kb: number;
+}
+
 export interface RebuildTrafficResult {
   rawSamples: number;
   firstSampleTs: number | null;
   lastSampleTs: number | null;
   normalizedSpeedRows: number;
+  deviceSessionRows: number;
   traffic5minRows: number;
   trafficHourRows: number;
   trafficDayRows: number;
@@ -87,6 +98,8 @@ export function rebuildTrafficFromSamples(
   `).all() as RawSample[];
 
   const fiveMin = new Map<string, BucketAccum>();
+  const sessions: SessionAccum[] = [];
+  let openSession: SessionAccum | null = null;
   let currentMac: string | null = null;
   let prev: PrevSample | null = null;
   let bytesDown = 0;
@@ -99,6 +112,10 @@ export function rebuildTrafficFromSamples(
     lastSampleTs = lastSampleTs == null ? sample.ts : Math.max(lastSampleTs, sample.ts);
 
     if (sample.mac !== currentMac) {
+      if (openSession) {
+        sessions.push(openSession);
+        openSession = null;
+      }
       currentMac = sample.mac;
       prev = null;
     }
@@ -108,13 +125,15 @@ export function rebuildTrafficFromSamples(
     const rawDownSumKb = Math.max(0, Number(sample.down_sum_kb ?? 0));
     const dtSec = prev ? Math.max(1, Math.round((sample.ts - prev.ts) / 1000)) : 30;
     const gapTooLarge = dtSec > 5 * 60;
-    const onlineSec = Number(sample.online_seconds ?? 0);
-    const sessionRestarted = Boolean(
+    const onlineMinutes = Number(sample.online_seconds ?? 0);
+    const reconnected = Boolean(prev && prev.online === 0 && sample.online === 1);
+    const uptimeReset = Boolean(
       prev &&
-      onlineSec > 0 &&
+      onlineMinutes > 0 &&
       Number(prev.online_seconds ?? 0) > 0 &&
-      onlineSec < Number(prev.online_seconds ?? 0)
+      onlineMinutes < Number(prev.online_seconds ?? 0)
     );
+    const sessionRestarted = reconnected || uptimeReset;
 
     let downSumKb = rawDownSumKb;
     let counterNoise = false;
@@ -141,6 +160,10 @@ export function rebuildTrafficFromSamples(
       const rawDeltaKb = downSumKb - prev.down_sum_kb;
       deltaDownBytes = rawDeltaKb > 5 * 1024 * 1024 ? 0 : Math.max(0, rawDeltaKb * 1024);
     }
+    const seedSessionFromCounter = !sessionRestarted || realCounterReset;
+    const sessionCounterBaseKb = seedSessionFromCounter
+      ? 0
+      : Math.max(0, Number(prev?.down_sum_kb ?? downSumKb));
 
     let deltaUpBytes = 0;
     if (prev && !gapTooLarge && sample.online === 1) {
@@ -149,6 +172,34 @@ export function rebuildTrafficFromSamples(
     }
 
     const activeSec = prev && !gapTooLarge && sample.online === 1 ? dtSec : 0;
+    if (sample.online === 1) {
+      if (openSession && sessionRestarted) {
+        openSession.ended_at = sample.ts;
+        sessions.push(openSession);
+        openSession = null;
+      }
+      if (!openSession) {
+        openSession = {
+          mac: sample.mac,
+          started_at: inferSessionStart(sample.ts, onlineMinutes),
+          ended_at: null,
+          bytes_down: 0,
+          bytes_up: 0,
+          down_counter_base_kb: sessionCounterBaseKb,
+        };
+      }
+      const counterFloorBytes = Math.max(0, (downSumKb - openSession.down_counter_base_kb) * 1024);
+      openSession.bytes_down = Math.max(
+        openSession.bytes_down + Math.max(0, deltaDownBytes),
+        counterFloorBytes,
+      );
+      openSession.bytes_up += Math.max(0, deltaUpBytes);
+    } else if (openSession) {
+      openSession.ended_at = sample.ts;
+      sessions.push(openSession);
+      openSession = null;
+    }
+
     addBucket(fiveMin, sample.mac, bucket5Min(sample.ts), {
       bytesDown: deltaDownBytes,
       bytesUp: deltaUpBytes,
@@ -159,8 +210,9 @@ export function rebuildTrafficFromSamples(
 
     bytesDown += deltaDownBytes;
     bytesUp += deltaUpBytes;
-    prev = { ts: sample.ts, up_speed_bps: upSpeed, down_sum_kb: downSumKb, online_seconds: onlineSec };
+    prev = { ts: sample.ts, online: sample.online, up_speed_bps: upSpeed, down_sum_kb: downSumKb, online_seconds: onlineMinutes };
   }
+  if (openSession) sessions.push(openSession);
 
   const keep5min = new Map<string, BucketAccum>();
   const hours = new Map<string, BucketAccum>();
@@ -195,6 +247,14 @@ export function rebuildTrafficFromSamples(
     INSERT INTO ${table} (mac, bucket_ts, bytes_down, bytes_up, active_sec, peak_down_bps, peak_up_bps)
     VALUES (@mac, @bucket_ts, @bytes_down, @bytes_up, @active_sec, @peak_down_bps, @peak_up_bps)
   `);
+  const insertSession = db.prepare(`
+    INSERT OR REPLACE INTO device_sessions (
+      mac, started_at, ended_at, bytes_down, bytes_up, down_counter_base_kb
+    )
+    VALUES (
+      @mac, @started_at, @ended_at, @bytes_down, @bytes_up, @down_counter_base_kb
+    )
+  `);
 
   const txn = db.transaction(() => {
     if (replaceAll) {
@@ -202,6 +262,7 @@ export function rebuildTrafficFromSamples(
       db.prepare(`DELETE FROM traffic_hour`).run();
       db.prepare(`DELETE FROM traffic_day`).run();
       db.prepare(`DELETE FROM traffic_month`).run();
+      db.prepare(`DELETE FROM device_sessions`).run();
     }
 
     for (const b of keep5min.values()) {
@@ -225,6 +286,14 @@ export function rebuildTrafficFromSamples(
     for (const b of days.values()) dayInsert.run(coarseParams(b));
     const monthInsert = insertCoarse('traffic_month');
     for (const b of months.values()) monthInsert.run(coarseParams(b));
+    for (const session of sessions) {
+      insertSession.run({
+        ...session,
+        bytes_down: Math.round(session.bytes_down),
+        bytes_up: Math.round(session.bytes_up),
+        down_counter_base_kb: Math.round(session.down_counter_base_kb),
+      });
+    }
   });
   txn();
 
@@ -233,6 +302,7 @@ export function rebuildTrafficFromSamples(
     firstSampleTs,
     lastSampleTs,
     normalizedSpeedRows,
+    deviceSessionRows: sessions.length,
     traffic5minRows: keep5min.size,
     trafficHourRows: hours.size,
     trafficDayRows: days.size,
@@ -244,6 +314,11 @@ export function rebuildTrafficFromSamples(
 
 function bucketKey(mac: string, bucketTs: number): string {
   return `${mac}|${bucketTs}`;
+}
+
+function inferSessionStart(ts: number, onlineMinutes: number): number {
+  const minutes = Number.isFinite(onlineMinutes) && onlineMinutes > 0 ? onlineMinutes : 0;
+  return ts - Math.round(minutes * 60_000);
 }
 
 function emptyBucket(mac: string, bucketTs: number): BucketAccum {

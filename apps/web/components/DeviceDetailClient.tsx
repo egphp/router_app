@@ -3,17 +3,17 @@ import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 import { fetcher } from '../lib/fetcher';
-import { formatBps, formatBytes, formatMacShort, categoryIcon, formatDuration, timeAgo } from '../lib/format';
+import { formatBps, formatBytes, formatMacShort, categoryIcon, categoryLabel, formatDuration, timeAgo } from '../lib/format';
 
 type Range = 'hour' | 'today' | 'week' | 'month' | 'year' | 'all';
 
-const RANGES: { value: Range; label: string }[] = [
-  { value: 'hour', label: 'Last hour' },
-  { value: 'today', label: 'Today' },
-  { value: 'week', label: 'Week' },
-  { value: 'month', label: 'Month' },
-  { value: 'year', label: 'Year' },
-  { value: 'all', label: 'All time' },
+const RANGES: { value: Range; label: string; shortLabel: string }[] = [
+  { value: 'hour', label: 'Last hour', shortLabel: 'Hour' },
+  { value: 'today', label: 'Today', shortLabel: 'Today' },
+  { value: 'week', label: 'Week', shortLabel: 'Week' },
+  { value: 'month', label: 'Month', shortLabel: 'Month' },
+  { value: 'year', label: 'Year', shortLabel: 'Year' },
+  { value: 'all', label: 'All time', shortLabel: 'All' },
 ];
 
 interface Device {
@@ -35,10 +35,12 @@ interface Device {
 }
 
 interface DailyRow { day_ts: number; day_label: string; bytes_down: number; bytes_up: number; total: number; }
+interface SessionRow { started_at: number; ended_at: number | null; bytes_down: number; bytes_up: number; }
 
-export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
+export function DeviceDetailClient({ device, initialStats, initialSessions, dailyUsage }: {
   device: Device;
   initialStats: { bytes_down: number; bytes_up: number; peak_down_bps: number; peak_up_bps: number };
+  initialSessions: SessionRow[];
   dailyUsage: DailyRow[];
 }) {
   const [range, setRange] = useState<Range>('today');
@@ -52,6 +54,7 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
   const { data, mutate } = useSWR<{
     device: Device;
     stats: typeof initialStats;
+    sessions: SessionRow[];
     traffic: Array<{ bucket_ts: number; bytes_down: number; bytes_up: number; peak_down_bps?: number; peak_up_bps?: number }>;
     attacks: { summary: Array<{ attack_kind: string; events: number; total: number; latest: number }>; recent: Array<{ ts: number; attack_kind: string; attack_count: number; message: string }> };
     dailyUsage: DailyRow[];
@@ -66,6 +69,7 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
   const traffic = data?.traffic ?? [];
   const attacks = data?.attacks;
   const currentDevice = data?.device ?? device;
+  const sessions = data?.sessions ?? initialSessions;
   const dailyRows = data?.dailyUsage ?? dailyUsage;
   const chartRange = selectedTrafficDay ? 'today' : range;
 
@@ -124,7 +128,7 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
                   )}
                   <span className="font-mono">{currentDevice.mac}</span>
                   <span className="text-slate-600">·</span>
-                  <span>category: <span className="text-slate-300">{currentDevice.category ?? 'unknown'}</span></span>
+                  <span>category: <span className="text-slate-300">{categoryLabel(currentDevice.category)}</span></span>
                 </div>
                 <div className="text-xs text-slate-500 mt-1">
                   first seen {new Date(currentDevice.first_seen).toLocaleString()} · last sample {new Date(currentDevice.last_seen).toLocaleString()}
@@ -158,9 +162,16 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
                     <option value="computer">💻 computer</option>
                     <option value="tv">📺 tv</option>
                     <option value="watch">⌚ watch</option>
+                    <option value="camera">📷 camera</option>
+                    <option value="game_console">🎮 game console</option>
+                    <option value="router">📡 router</option>
+                    <option value="access_point">📶 access point / repeater</option>
+                    <option value="nas">🗄️ NAS / storage</option>
+                    <option value="streaming">▶️ streaming box</option>
+                    <option value="speaker">🔊 speaker</option>
+                    <option value="smart_home">🏠 smart home</option>
                     <option value="iot">🔌 iot</option>
                     <option value="printer">🖨️ printer</option>
-                    <option value="router">📡 router/AP</option>
                     <option value="unknown">❔ unknown</option>
                   </select>
                 </label>
@@ -197,6 +208,71 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
       </div>
 
       <div className="card p-5">
+        <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+          <div className="stat-label">Recent sessions</div>
+          <div className="text-xs text-slate-500">{sessions.length} shown</div>
+        </div>
+        {sessions.length === 0 ? (
+          <div className="text-sm text-slate-500 py-4">No sessions recorded yet.</div>
+        ) : (
+          <>
+            <div className="space-y-2 sm:hidden">
+              {sessions.slice(0, 10).map((session) => {
+                const end = session.ended_at ?? Date.now();
+                return (
+                  <div key={session.started_at} className="rounded-md border border-bg-border bg-bg-elevated/35 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs text-slate-500">Started</div>
+                        <div className="text-sm text-slate-200">{new Date(session.started_at).toLocaleString()}</div>
+                      </div>
+                      {session.ended_at === null && <span className="shrink-0 rounded-full bg-accent-green/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-accent-green">active</span>}
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                      <InfoPill label="Duration" value={formatDuration((end - session.started_at) / 1000)} />
+                      <InfoPill label="Total" value={formatBytes(session.bytes_down + session.bytes_up)} strong />
+                      <InfoPill label="Download" value={formatBytes(session.bytes_down)} tone="down" />
+                      <InfoPill label="Upload" value={formatBytes(session.bytes_up)} tone="up" />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-sm">
+              <thead className="text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">Started</th>
+                  <th className="px-3 py-2 text-left">Duration</th>
+                  <th className="px-3 py-2 text-right">Download</th>
+                  <th className="px-3 py-2 text-right">Upload</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.slice(0, 10).map((session) => {
+                  const end = session.ended_at ?? Date.now();
+                  return (
+                    <tr key={session.started_at} className="border-t border-bg-border">
+                      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">{new Date(session.started_at).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-slate-400 whitespace-nowrap">
+                        {formatDuration((end - session.started_at) / 1000)}
+                        {session.ended_at === null && <span className="ml-2 text-accent-green">active</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right text-blue-300 tabular-nums">{formatBytes(session.bytes_down)}</td>
+                      <td className="px-3 py-2 text-right text-orange-300 tabular-nums">{formatBytes(session.bytes_up)}</td>
+                      <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatBytes(session.bytes_down + session.bytes_up)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="card p-5">
         <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
           <div>
             <div className="stat-label">Traffic by bucket</div>
@@ -204,11 +280,12 @@ export function DeviceDetailClient({ device, initialStats, dailyUsage }: {
               {selectedTrafficDay ? `Selected day · ${dateLabelFromInput(selectedTrafficDay)}` : RANGES.find((r) => r.value === range)?.label}
             </div>
           </div>
-          <div className="flex bg-bg-elevated border border-bg-border rounded-md overflow-x-auto text-xs scrollbar-thin max-w-full">
+          <div className="grid w-full grid-cols-2 min-[420px]:grid-cols-3 sm:w-auto sm:flex bg-bg-elevated border border-bg-border rounded-md overflow-hidden text-xs">
             {RANGES.map((r) => (
               <button key={r.value} onClick={() => { setSelectedTrafficDay(''); setRange(r.value); }}
-                className={`px-2 sm:px-3 py-1.5 transition whitespace-nowrap shrink-0 ${range === r.value ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-100'}`}>
-                {r.label}
+                className={`px-2 sm:px-3 py-1.5 transition text-center ${range === r.value ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-100'}`}>
+                <span className="sm:hidden">{r.shortLabel}</span>
+                <span className="hidden sm:inline">{r.label}</span>
               </button>
             ))}
           </div>
@@ -354,8 +431,50 @@ function DailyComparison({ rows }: { rows: DailyRow[] }) {
       {visibleRows.length === 0 ? (
         <div className="text-sm text-slate-500 py-4">{selectedDay ? 'No traffic recorded for this day.' : 'No daily data yet.'}</div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        <>
+          <div className="space-y-2 sm:hidden">
+            {visibleRows.map((r) => {
+              const sourceIndex = rows.findIndex((row) => row.day_ts === r.day_ts);
+              const prev = sourceIndex >= 0 ? rows[sourceIndex + 1] : undefined;
+              const delta = prev ? r.total - prev.total : null;
+              const pct = prev && prev.total > 0 ? Math.round(((r.total - prev.total) / prev.total) * 100) : null;
+              const isToday = dateInputValue(r.day_ts) === dateInputValue(Date.now());
+              const isSelected = selectedDay === dateInputValue(r.day_ts);
+              const barPct = Math.round((r.total / max) * 100);
+              return (
+                <div key={r.day_ts} className={`rounded-md border border-bg-border bg-bg-elevated/35 p-3 ${isToday || isSelected ? 'ring-1 ring-accent/40' : ''}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-100">{r.day_label}</div>
+                      {isToday && <div className="text-[10px] text-accent">today</div>}
+                      {isSelected && !isToday && <div className="text-[10px] text-accent">selected</div>}
+                    </div>
+                    <div className="text-right tabular-nums">
+                      <div className="text-xs text-slate-500">Total</div>
+                      <div className="font-semibold text-slate-100">{formatBytes(r.total)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <InfoPill label="Down" value={formatBytes(r.bytes_down)} tone="down" />
+                    <InfoPill label="Up" value={formatBytes(r.bytes_up)} tone="up" />
+                    <InfoPill
+                      label="vs prev"
+                      value={delta === null ? '—' : `${delta > 0 ? '+' : ''}${formatBytes(Math.abs(delta))}${pct !== null ? ` (${pct > 0 ? '+' : ''}${pct}%)` : ''}`}
+                      tone={delta === null ? undefined : delta > 0 ? 'err' : delta < 0 ? 'ok' : undefined}
+                    />
+                    <div className="rounded-md border border-bg-border bg-bg-elevated/70 px-3 py-2 min-w-0">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-500">Relative</div>
+                      <div className="mt-2 h-2 rounded-full bg-bg-border overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-blue-500 to-purple-500" style={{ width: `${barPct}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="hidden sm:block overflow-x-auto">
+            <table className="w-full text-sm">
             <thead className="text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-2 py-2 text-left">Day</th>
@@ -401,9 +520,28 @@ function DailyComparison({ rows }: { rows: DailyRow[] }) {
                 );
               })}
             </tbody>
-          </table>
-        </div>
+            </table>
+          </div>
+        </>
       )}
+    </div>
+  );
+}
+
+function InfoPill({ label, value, tone, strong }: { label: string; value: string; tone?: 'down' | 'up' | 'ok' | 'err'; strong?: boolean }) {
+  const valueClass = tone === 'down'
+    ? 'text-blue-400'
+    : tone === 'up'
+      ? 'text-orange-400'
+      : tone === 'ok'
+        ? 'text-accent-green'
+        : tone === 'err'
+          ? 'text-accent-red'
+          : 'text-slate-200';
+  return (
+    <div className="rounded-md border border-bg-border bg-bg-elevated/70 px-3 py-2 min-w-0">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`mt-0.5 tabular-nums break-words ${strong ? 'font-semibold' : ''} ${valueClass}`}>{value}</div>
     </div>
   );
 }

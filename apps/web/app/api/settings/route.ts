@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { loadConfig } from '@tenda/shared';
+import { isLocalOrLanRequest, isPanelPasswordConfigured } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +31,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  if (!isPanelPasswordConfigured() && !isLocalOrLanRequest(req)) {
+    return NextResponse.json({ ok: false, error: 'initial setup must be done locally' }, { status: 403 });
+  }
   const body = await req.json();
   const { action, host, password } = body as { action?: string; host?: string; password?: string };
 

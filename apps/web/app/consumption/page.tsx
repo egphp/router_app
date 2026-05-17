@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
@@ -86,25 +86,25 @@ export default function ConsumptionPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-semibold">Consumption per device</h1>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:flex sm:items-center">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…"
-            className="bg-bg-elevated border border-bg-border rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-accent" />
+            className="w-full min-w-0 bg-bg-elevated border border-bg-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent sm:w-56" />
           <select value={`${sort.key}:${sort.dir}`} onChange={(e) => {
             const [k, d] = e.target.value.split(':') as [SortKey, SortDir];
             setSort(k, d);
           }}
-            className="lg:hidden bg-bg-elevated border border-bg-border rounded px-2 py-1.5 text-sm">
+            className="w-full min-w-0 bg-bg-elevated border border-bg-border rounded px-2 py-1.5 text-sm lg:hidden">
             <option value="now_down:desc">Sort: ↓ now (max)</option>
             <option value="now_down:asc">Sort: ↓ now (min)</option>
             <option value="now_up:desc">Sort: ↑ now (max)</option>
             <option value="now_up:asc">Sort: ↑ now (min)</option>
             {PERIODS.map((p) => (
-              <>
+              <Fragment key={p.value}>
                 <option key={`${p.value}:desc`} value={`${p.value}:desc`}>Sort: {p.label} ↓</option>
                 <option key={`${p.value}:asc`} value={`${p.value}:asc`}>Sort: {p.label} ↑</option>
-              </>
+              </Fragment>
             ))}
           </select>
         </div>

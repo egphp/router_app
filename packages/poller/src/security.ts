@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { RouterDevice } from '@tenda/shared';
+import { insertAlertIfAllowed } from '@tenda/shared';
 import { log } from './logger.js';
 
 export interface SecurityCheck {
@@ -140,6 +141,7 @@ export class SecurityScanner {
     // Persist with smart dedupe: respect user-dismissed alerts for 24h to prevent
     // spam when the underlying condition is a known/accepted state (e.g. Mac Studio
     // permanently has 200+ connections from normal app traffic).
+    const inserted: SecurityCheck[] = [];
     for (const c of out) {
       const macParam = c.mac;
       const recent = this.findRecentAlert.get(macParam, macParam, c.rule) as
@@ -153,17 +155,18 @@ export class SecurityScanner {
         if (now - refTs < cooldown) continue;
       }
       try {
-        this.insertAlert.run(
-          'security',
-          c.mac,
-          JSON.stringify({ rule: c.rule, severity: c.severity, message: c.message, detail: c.detail }),
-          now,
-        );
+        const result = insertAlertIfAllowed(this.db, 'security', c.mac, {
+          rule: c.rule,
+          severity: c.severity,
+          message: c.message,
+          detail: c.detail,
+        }, now);
+        if (result.inserted) inserted.push(c);
       } catch (e) {
         log.warn('failed to persist security alert', String(e));
       }
     }
 
-    return out;
+    return inserted;
   }
 }
