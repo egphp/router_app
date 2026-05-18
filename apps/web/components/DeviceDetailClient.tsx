@@ -33,6 +33,8 @@ interface Device {
   last_online_at: number | null;
   last_seen: number;
   notes: string | null;
+  reserved?: 0 | 1;
+  reserved_ip?: string | null;
 }
 
 interface DailyRow { day_ts: number; day_label: string; bytes_down: number; bytes_up: number; total: number; }
@@ -126,6 +128,14 @@ export function DeviceDetailClient({ device, initialStats, initialSessions, dail
                   {displayName}
                   {currentDevice.is_new === 1 && (
                     <span className="text-[10px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold">NEW</span>
+                  )}
+                  {currentDevice.reserved === 1 && (
+                    <span
+                      className="text-[10px] uppercase tracking-wide bg-accent-green/15 text-accent-green rounded px-1.5 py-0.5 font-semibold"
+                      title={currentDevice.reserved_ip ? `Address reservation → ${currentDevice.reserved_ip}` : 'Address reserved on router'}
+                    >
+                      🔒 reserved{currentDevice.reserved_ip ? ` · ${currentDevice.reserved_ip}` : ''}
+                    </span>
                   )}
                 </h1>
                 <div className="text-sm text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">

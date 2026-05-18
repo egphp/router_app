@@ -20,9 +20,10 @@ interface AffectedDevice {
   vendor: string | null;
   category: string | null;
   connect_type: number | null;
+  reserved: boolean;
 }
 
-function describeDevice(d: any): AffectedDevice {
+function describeDevice(d: any, reservedMacs?: Set<string>): AffectedDevice {
   const mac = String(d.hostMAC || '').toUpperCase();
   const oui = mac ? lookupOui(mac) : { vendor: null as any, category: null as any };
   return {
@@ -33,6 +34,7 @@ function describeDevice(d: any): AffectedDevice {
     vendor: oui.vendor ?? null,
     category: oui.category ?? null,
     connect_type: d.hostConnectType ?? null,
+    reserved: reservedMacs ? reservedMacs.has(mac) : false,
   };
 }
 
@@ -71,7 +73,7 @@ export class SecurityScanner {
     `);
   }
 
-  scan(now: number, devices: RouterDevice[]): SecurityCheck[] {
+  scan(now: number, devices: RouterDevice[], reservedMacs: Set<string> = new Set()): SecurityCheck[] {
     const out: SecurityCheck[] = [];
     const onlineDevices = devices.filter((d) => d.hostOnlineStatus === 1) as any[];
 
@@ -86,7 +88,7 @@ export class SecurityScanner {
           message: `${deviceLabel(d)} has ${conn} concurrent connections`,
           detail: {
             connections: conn,
-            ...describeDevice(d),
+            ...describeDevice(d, reservedMacs),
           },
         });
       }
@@ -105,27 +107,31 @@ export class SecurityScanner {
           detail: {
             up_bps: up,
             up_human: `${(up / 1024 / 1024).toFixed(1)} MB/s`,
-            ...describeDevice(d),
+            ...describeDevice(d, reservedMacs),
           },
         });
       }
     }
 
     // 3. Locally-administered MAC = device with randomized/spoofed address.
-    //    iOS/Android private MAC. We emit one info-level finding *per device*, so
-    //    the security page lists exactly which MACs are randomized, and dedupe
-    //    keeps each MAC from re-firing once acknowledged.
+    //    iOS/Android private MAC. We emit one info-level finding *per device*,
+    //    so the security page lists exactly which MACs are randomized, and
+    //    dedupe keeps each MAC from re-firing once acknowledged.
+    //
+    //    Devices the user has reserved on the router (Address Reservation)
+    //    are intentionally accepted — silence the finding for them.
     for (const d of devices as any[]) {
-      const mac = String(d.hostMAC || '');
+      const mac = String(d.hostMAC || '').toUpperCase();
       if (!mac) continue;
       const first = parseInt(mac.slice(0, 2), 16);
       if (Number.isNaN(first) || !(first & 0x02)) continue;
+      if (reservedMacs.has(mac)) continue;
       out.push({
         rule: 'random_mac_device',
         severity: 'info',
         mac,
         message: `${deviceLabel(d)} uses a randomized MAC address`,
-        detail: describeDevice(d),
+        detail: describeDevice(d, reservedMacs),
       });
     }
 
@@ -150,7 +156,7 @@ export class SecurityScanner {
             count: arr.length,
             // Keep legacy `macs` for any external consumer; add structured list too.
             macs: arr.map((x) => x.hostMAC),
-            devices: arr.map(describeDevice),
+            devices: arr.map((m) => describeDevice(m, reservedMacs)),
           },
         });
       }
@@ -177,7 +183,7 @@ export class SecurityScanner {
             mac: d.hostMAC,
             message: `${deviceLabel(d)} reports IP ${ip} outside the LAN subnet (${dominant[0]}.x)`,
             detail: {
-              ...describeDevice(d),
+              ...describeDevice(d, reservedMacs),
               // Override the device IP with the reported (out-of-subnet) one for clarity.
               ip,
               expected_subnet: expectedSubnet,

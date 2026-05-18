@@ -28,6 +28,8 @@ export interface DeviceRow {
   last_online_at: number | null;
   last_seen: number;
   first_seen: number;
+  reserved: 0 | 1;
+  reserved_ip: string | null;
 }
 
 export interface RouterSnapshot {
@@ -80,7 +82,9 @@ export function getLatestDevices(): DeviceRow[] {
            COALESCE(td.bd, 0) AS bytes_today,
            COALESCE(td.bu, 0) AS bytes_up_today,
            MAX(COALESCE(ses.bd, 0), COALESCE(at.bd, 0)) AS bytes_total,
-           MAX(COALESCE(ses.bu, 0), COALESCE(at.bu, 0)) AS bytes_up_total
+           MAX(COALESCE(ses.bu, 0), COALESCE(at.bu, 0)) AS bytes_up_total,
+           CASE WHEN res.mac IS NOT NULL THEN 1 ELSE 0 END AS reserved,
+           res.ip AS reserved_ip
     FROM devices d
     LEFT JOIN latest l ON l.mac = d.mac
     LEFT JOIN samples_raw s ON s.mac = d.mac AND s.ts = l.ts
@@ -88,6 +92,7 @@ export function getLatestDevices(): DeviceRow[] {
     LEFT JOIN today td ON td.mac = d.mac
     LEFT JOIN alltime at ON at.mac = d.mac
     LEFT JOIN sessions ses ON ses.mac = d.mac
+    LEFT JOIN dhcp_reservations res ON res.mac = d.mac
     ORDER BY bytes_today DESC, d.last_seen DESC
   `).all(...todayBytes.params, ...allBytes.params) as DeviceRow[];
   return rows.map((r) => ({
@@ -107,6 +112,8 @@ export function getLatestDevices(): DeviceRow[] {
     bytes_up_today: Number(r.bytes_up_today ?? 0),
     bytes_total: Number(r.bytes_total ?? 0),
     bytes_up_total: Number(r.bytes_up_total ?? 0),
+    reserved: (r.reserved ?? 0) as 0 | 1,
+    reserved_ip: r.reserved_ip ?? null,
   }));
 }
 
@@ -509,7 +516,9 @@ export function getDevice(mac: string) {
            s.ip, s.online, s.connect_type, s.connection_kind, s.wifi_band, s.wifi_rssi_dbm,
            s.wifi_signal_percent, s.wifi_distance_m, s.wifi_distance_source,
            COALESCE(s.up_speed_bps, 0) AS up_speed_bps,
-           COALESCE(s.down_speed_bps, 0) AS down_speed_bps
+           COALESCE(s.down_speed_bps, 0) AS down_speed_bps,
+           CASE WHEN res.mac IS NOT NULL THEN 1 ELSE 0 END AS reserved,
+           res.ip AS reserved_ip
     FROM devices d
     LEFT JOIN (
       SELECT *
@@ -518,6 +527,7 @@ export function getDevice(mac: string) {
       ORDER BY ts DESC
       LIMIT 1
     ) s ON s.mac = d.mac
+    LEFT JOIN dhcp_reservations res ON res.mac = d.mac
     WHERE d.mac = ?
   `).get(mac, mac);
 }

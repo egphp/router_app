@@ -22,6 +22,7 @@ export class Sampler {
   private timer: NodeJS.Timeout | null = null;
   private rollupTimer: NodeJS.Timeout | null = null;
   private logPullTimer: NodeJS.Timeout | null = null;
+  private reservationTimer: NodeJS.Timeout | null = null;
   private lastUptimeSec = 0;
   private accumulator: Accumulator;
   private wanAccumulator: WanAccumulator;
@@ -32,8 +33,11 @@ export class Sampler {
   private nsfw: NsfwScanner;
   private thresholds: ThresholdAlertMonitor;
   private telemetry: RouterTelemetry | null = null;
+  private reservedMacs = new Set<string>();
 
   private insertRouterState: Database.Statement;
+  private upsertReservation: Database.Statement;
+  private deleteReservationsExcept: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
@@ -53,8 +57,30 @@ export class Sampler {
       INSERT OR REPLACE INTO router_state (ts, uptime_sec, is_reboot, online_count) VALUES (?, ?, ?, ?)
     `);
 
+    this.upsertReservation = db.prepare(`
+      INSERT INTO dhcp_reservations (mac, ip, hostname, router_id, updated_at)
+      VALUES (@mac, @ip, @hostname, @router_id, @updated_at)
+      ON CONFLICT(mac) DO UPDATE SET
+        ip = excluded.ip,
+        hostname = excluded.hostname,
+        router_id = excluded.router_id,
+        updated_at = excluded.updated_at
+    `);
+    this.deleteReservationsExcept = db.prepare(`
+      DELETE FROM dhcp_reservations WHERE mac NOT IN (SELECT value FROM json_each(?))
+    `);
+
     const lastState = db.prepare(`SELECT uptime_sec FROM router_state ORDER BY ts DESC LIMIT 1`).get() as { uptime_sec: number } | undefined;
     if (lastState) this.lastUptimeSec = lastState.uptime_sec;
+
+    // Hydrate reserved-MAC cache from DB at startup so the first cycle's
+    // security scan already sees whatever the user has reserved.
+    try {
+      const rows = db.prepare(`SELECT mac FROM dhcp_reservations`).all() as Array<{ mac: string }>;
+      for (const r of rows) this.reservedMacs.add(r.mac);
+    } catch {
+      // Table may not exist yet on a brand-new install — migration runs before start().
+    }
   }
 
   start(): void {
@@ -68,10 +94,18 @@ export class Sampler {
     this.logPullTimer = setInterval(() => {
       this.logPuller.pull().catch((e) => log.warn('log pull error', String(e)));
     }, 2 * MIN);
+    // Refresh DHCP Address Reservations every minute. These rarely change but
+    // the security scanner needs them fresh to silence findings for reserved
+    // MACs (random or otherwise).
+    this.refreshReservations().catch((e) => log.warn('initial reservations refresh failed', String(e)));
+    this.reservationTimer = setInterval(() => {
+      this.refreshReservations().catch((e) => log.warn('reservations refresh failed', String(e)));
+    }, MIN);
   }
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.reservationTimer) { clearInterval(this.reservationTimer); this.reservationTimer = null; }
     if (this.rollupTimer) { clearInterval(this.rollupTimer); this.rollupTimer = null; }
     if (this.logPullTimer) { clearInterval(this.logPullTimer); this.logPullTimer = null; }
   }
@@ -114,8 +148,10 @@ export class Sampler {
         });
       }
 
-      // Security checks every cycle (with internal dedupe).
-      const sec = this.security.scan(now, devices);
+      // Security checks every cycle (with internal dedupe). Pass the cached
+      // reserved-MAC set so the scanner can skip findings for devices the user
+      // has explicitly bound on the router.
+      const sec = this.security.scan(now, devices, this.reservedMacs);
       if (sec.length > 0) {
         log.warn('security checks fired', { count: sec.length, rules: [...new Set(sec.map(s => s.rule))] });
         void this.sendSecurityNotifications(sec).catch((e) => {
@@ -179,6 +215,53 @@ export class Sampler {
     } catch (e) {
       log.error('rollup failed', String(e));
     }
+  }
+
+  /**
+   * Pull the router's Address Reservation list and persist it locally. The
+   * cached set is read by the security scanner to silence random_mac_device
+   * findings for any MAC the user has already bound to a fixed IP.
+   */
+  private async refreshReservations(): Promise<void> {
+    const list = await this.router.getDhcpReservations();
+    const now = Date.now();
+    const bound = list.filter((r) => r.bindStatus === true);
+    const macs = bound.map((r) => normalizeMac(r.bindMACAddr)).filter((m) => m.length > 0);
+
+    const txn = this.db.transaction(() => {
+      for (const r of bound) {
+        const mac = normalizeMac(r.bindMACAddr);
+        if (!mac) continue;
+        this.upsertReservation.run({
+          mac,
+          ip: r.bindIPAddr,
+          hostname: (r.hostName && r.hostName !== '(null)') ? r.hostName : null,
+          router_id: r.ID,
+          updated_at: now,
+        });
+      }
+      // Remove rows the router no longer reports as reserved.
+      this.deleteReservationsExcept.run(JSON.stringify(macs));
+      // Auto-dismiss any still-active random_mac_device finding whose MAC is
+      // now reserved. This handles the case where the user reserved an MAC
+      // after the alert was already raised — we don't want a stale finding
+      // sitting in the inbox for a device they've already accepted.
+      this.db.prepare(`
+        UPDATE alerts
+        SET dismissed_at = ?
+        WHERE kind = 'security'
+          AND dismissed_at IS NULL
+          AND json_extract(payload, '$.rule') = 'random_mac_device'
+          AND mac IN (SELECT mac FROM dhcp_reservations)
+      `).run(now);
+    });
+    txn();
+
+    // Refresh the in-memory set used by the security scanner.
+    const next = new Set<string>(macs);
+    this.reservedMacs.clear();
+    for (const m of next) this.reservedMacs.add(m);
+    log.debug('reservations refreshed', { count: macs.length });
   }
 
   private async sendNewDeviceNotifications(newMacs: string[], devices: Array<{ hostMAC?: string; hostName?: string; hostIP?: string }>): Promise<void> {

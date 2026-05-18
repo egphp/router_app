@@ -256,6 +256,23 @@ export class RouterClient {
   }
 
   /**
+   * Returns the router's Address Reservation list — every entry the user has
+   * manually bound (MAC → IP, optional hostName). Used to silence "random MAC"
+   * findings for devices the user has explicitly reserved.
+   */
+  async getDhcpReservations(): Promise<Array<{ ID: number; bindStatus: boolean; bindIPAddr: string; bindMACAddr: string; hostName: string }>> {
+    try {
+      const r = await this.call<{ getDhcpClientList: any }>(['getDhcpClientList'], { getDhcpClientList: '' });
+      const list = r.getDhcpClientList;
+      if (!Array.isArray(list)) return [];
+      return list as Array<{ ID: number; bindStatus: boolean; bindIPAddr: string; bindMACAddr: string; hostName: string }>;
+    } catch (e) {
+      log.warn('router.getDhcpReservations failed', String(e));
+      return [];
+    }
+  }
+
+  /**
    * Reads the router's system log. sysLogType:
    *   0 = all, 1 = system events (login/sync), 2 = attack log (ARP/DDoS), 3 = quits
    */

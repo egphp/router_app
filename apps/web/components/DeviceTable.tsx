@@ -7,7 +7,7 @@ import { formatBps, formatBytes, formatMacShort, categoryIcon, timeAgo } from '.
 import { usePersistedState } from '../lib/usePersistedState';
 import { useTableSort, sortNum, sortStr, type SortDir } from '../lib/useTableSort';
 import { clsx } from 'clsx';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Lock } from 'lucide-react';
 
 interface DeviceRow {
   mac: string;
@@ -28,6 +28,8 @@ interface DeviceRow {
   last_online_at: number | null;
   last_seen: number;
   first_seen: number;
+  reserved?: 0 | 1;
+  reserved_ip?: string | null;
 }
 
 type SortKey = 'name' | 'down' | 'up' | 'today' | 'total' | 'last_seen';
@@ -183,6 +185,14 @@ export function DeviceTable() {
                   {d.is_new === 1 && (
                     <span className="text-[9px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold leading-none">NEW</span>
                   )}
+                  {d.reserved === 1 && (
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-accent-green/15 text-accent-green flex items-center gap-1"
+                      title={d.reserved_ip ? `Address reservation → ${d.reserved_ip}` : 'Address reserved on router'}
+                    >
+                      <Lock size={9} /> reserved
+                    </span>
+                  )}
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${d.online ? 'bg-accent-green/20 text-accent-green' : 'bg-slate-700/40 text-slate-500'}`}>
                     {d.online ? 'online' : 'offline'}
                   </span>
@@ -265,6 +275,14 @@ export function DeviceTable() {
                     </div>
                     {d.is_new === 1 && (
                       <span className="ml-2 text-[10px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold">NEW</span>
+                    )}
+                    {d.reserved === 1 && (
+                      <span
+                        className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-accent-green/15 text-accent-green flex items-center gap-1"
+                        title={d.reserved_ip ? `Address reservation → ${d.reserved_ip}` : 'Address reserved on router'}
+                      >
+                        <Lock size={10} /> reserved
+                      </span>
                     )}
                   </div>
                 </td>

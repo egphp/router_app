@@ -9,6 +9,7 @@ export interface AffectedDevice {
   router_remark?: string | null;
   vendor?: string | null;
   category?: string | null;
+  reserved?: 0 | 1 | boolean;
 }
 
 function deviceLabel(d: AffectedDevice): string {
@@ -40,7 +41,14 @@ export function AffectedDeviceList({
         >
           <span className="text-lg shrink-0">{categoryIcon(d.category ?? null)}</span>
           <div className="flex-1 min-w-0">
-            <div className="truncate text-slate-100 font-medium">{deviceLabel(d)}</div>
+            <div className="truncate text-slate-100 font-medium flex items-center gap-1.5">
+              {deviceLabel(d)}
+              {d.reserved ? (
+                <span className="text-[9px] uppercase tracking-wide bg-accent-green/15 text-accent-green rounded px-1 py-0.5">
+                  reserved
+                </span>
+              ) : null}
+            </div>
             <div className="text-[10px] text-slate-500 font-mono">
               {formatMacShort(d.mac)} · {d.ip || 'no IP'} · {d.vendor || 'unknown vendor'}
             </div>
