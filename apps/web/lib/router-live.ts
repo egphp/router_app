@@ -277,6 +277,8 @@ function normalizeDevices(rows: Array<Record<string, unknown>> | undefined): Rou
       down_speed_bps: speedKbToBps(row.hostDownloadSpeed),
       down_sum_kb: Math.max(0, Math.round(Number(row.hostDownloadSum ?? 0))),
       connect_type: finiteNumber(row.hostConnectType),
+      // Tenda firmware reports onlineTime in MINUTES. We store in seconds so
+      // it lines up with samples_raw.online_seconds (= onlineMinutes * 60).
       online_seconds: finiteNumber(row.onlineTime) === null ? null : finiteNumber(row.onlineTime)! * 60,
     }))
     .filter((row) => row.mac.length > 0);

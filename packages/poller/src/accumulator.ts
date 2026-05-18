@@ -158,7 +158,13 @@ export class Accumulator {
         const downSpeed = Math.round(downKBs * 1024);
         const rawDownSumKb = Number(dev.hostDownloadSum ?? 0);
         const sessions = isOnline ? Number((dev as any).hostConnectCount ?? 0) : 0;
+        // Tenda firmware reports `onlineTime` in MINUTES since the device's
+        // current session started — the integer ticks once per wall-clock minute.
+        // We persist it as `online_seconds` (multiplied by 60 on the way in) so
+        // downstream comparisons stay in a single unit. Verified empirically: in
+        // 10 minutes of wall clock, the field increments by ~10.
         const onlineMinutes = isOnline ? Number((dev as any).onlineTime ?? 0) : 0;
+        const onlineSecondsForStorage = onlineMinutes * 60;
         const wifi = extractWifiMetrics(dev);
 
         const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
@@ -170,9 +176,9 @@ export class Accumulator {
         const reconnected = Boolean(prev && prev.online === 0 && isOnline);
         const uptimeReset = Boolean(
           prev &&
-          onlineMinutes > 0 &&
+          onlineSecondsForStorage > 0 &&
           Number(prev.online_seconds ?? 0) > 0 &&
-          onlineMinutes < Number(prev.online_seconds ?? 0)
+          onlineSecondsForStorage < Number(prev.online_seconds ?? 0)
         );
         const sessionRestarted = reconnected || uptimeReset;
 
@@ -212,7 +218,7 @@ export class Accumulator {
             prevKb: prev.down_sum_kb,
             curKb: downSumKb,
             prevOnlineSec: prev.online_seconds,
-            curOnlineSec: onlineMinutes,
+            curOnlineSec: onlineSecondsForStorage,
           });
           deltaDownBytes = downSumKb * 1024;
         } else {
@@ -231,15 +237,22 @@ export class Accumulator {
           : Math.max(0, Number(prev?.down_sum_kb ?? downSumKb));
 
         // Upload bytes are estimated from instantaneous KB/s × elapsed time, because the
-        // Tenda W30E firmware does not expose hostUploadSum. This undercounts bursts that
-        // happen between samples; the WAN-level cumulative total (see Sampler) is the
-        // ground truth for total upload.
+        // Tenda W30E firmware does not expose hostUploadSum. We use min(prevUp, upSpeed)
+        // as a conservative lower-bound estimator: trapezoidal/mean integration was
+        // overshooting because a single high sample (a burst peak captured at sample
+        // time) gets extrapolated over the full sample interval. Min-of-pair gives a
+        // safe estimate that matches WAN ground truth much more closely.
         let deltaUpBytes = 0;
         if (prev && !gapTooLarge && isOnline) {
           const prevUp = prev.up_speed_bps;
-          deltaUpBytes = Math.round(((prevUp + upSpeed) / 2) * dtSec);
+          deltaUpBytes = Math.round(Math.min(prevUp, upSpeed) * dtSec);
         }
-        // Sanity cap: avoid a corrupted speed value blowing up totals.
+        // Sanity cap: bytes/sec must not exceed the higher endpoint by more than 10%.
+        const upBoundBytesPerSec = Math.max(prev?.up_speed_bps ?? 0, upSpeed);
+        const maxBytesThisCycle = Math.round(upBoundBytesPerSec * dtSec * 1.1);
+        if (deltaUpBytes > maxBytesThisCycle) {
+          deltaUpBytes = maxBytesThisCycle;
+        }
         if (deltaUpBytes > 5 * 1024 * 1024 * 1024) {
           log.warn('accumulator: implausible up delta clamped', { mac, deltaUpBytes, dtSec });
           deltaUpBytes = 0;
@@ -266,7 +279,7 @@ export class Accumulator {
           down_speed_bps: downSpeed,
           down_sum_kb: downSumKb,
           sessions,
-          online_seconds: onlineMinutes,
+          online_seconds: onlineSecondsForStorage,
           connect_type: wifi.connectType,
           connection_kind: wifi.connectionKind,
           wifi_band: wifi.wifiBand,

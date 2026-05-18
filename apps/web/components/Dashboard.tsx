@@ -131,8 +131,16 @@ export function Dashboard() {
 
   const todayDown = status?.bytes_today_down ?? 0;
   const todayUp = status?.bytes_today_up ?? 0;
+  const wanDown = status?.wan_today_down ?? 0;
+  const wanUp = status?.wan_today_up ?? 0;
   const wanSince = status?.wan_first_sample_ts
     ? new Date(status.wan_first_sample_ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null;
+  // Diagnostic: how closely does the device-level upload estimate match the
+  // independent WAN counter? Close to 100% means the per-device numbers are
+  // reliable; a wide gap suggests one side is off.
+  const wanMatchPct = wanUp > 0
+    ? Math.round(100 * Math.min(todayUp, wanUp) / Math.max(todayUp, wanUp))
     : null;
 
   return (
@@ -153,12 +161,20 @@ export function Dashboard() {
             tone={status?.connected ? 'mint' : 'coral'}
           />
           <StatCard
-            label="Today (device estimate)"
-            value={formatBytes(todayDown + todayUp)}
-            hint={`↓ ${formatBytes(todayDown)} · ↑ ${formatBytes(todayUp)}`}
+            label="Today · download"
+            value={formatBytes(todayDown)}
+            hint={
+              wanMatchPct !== null
+                ? `↑ ${formatBytes(todayUp)} up · matches WAN ${wanMatchPct}%`
+                : `↑ ${formatBytes(todayUp)} up · WAN ↓ ${formatBytes(wanDown)}`
+            }
             icon={<Download size={16} strokeWidth={2.2} />}
             tone="peach"
-            title={`WAN observed${wanSince ? ` since ${wanSince}` : ''}: ↓ ${formatBytes(status?.wan_today_down ?? 0)} · ↑ ${formatBytes(status?.wan_today_up ?? 0)}`}
+            title={
+              `Download is the per-device counter reported by the router page (resets when a device reconnects).\n` +
+              `Upload is integrated from instant speed samples; we cross-check the per-device sum against the independent WAN counter.\n` +
+              `WAN observed${wanSince ? ` since ${wanSince}` : ''}: ↓ ${formatBytes(wanDown)} · ↑ ${formatBytes(wanUp)}.`
+            }
           />
           <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
         </div>

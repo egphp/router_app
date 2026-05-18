@@ -70,15 +70,18 @@ export function TopTalkers() {
                   <div className="truncate transition" style={{ color: 'var(--text)' }}>{t.label}</div>
                   {t.ip && <div className="text-[10px] font-mono leading-tight" style={{ color: 'var(--text-3)' }}>{t.ip}</div>}
                 </div>
-                <span className="text-xs tabular-nums shrink-0 font-medium" style={{ color: 'var(--text-2)' }}>{formatBytes(total)}</span>
+                <div className="text-right shrink-0 leading-tight">
+                  <div className="text-xs tabular-nums font-medium" style={{ color: 'var(--text-2)' }}>
+                    <span style={{ color: 'var(--ice)' }}>↓</span> {formatBytes(t.bytes_down)}
+                  </div>
+                  <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-3)' }}>
+                    <span style={{ color: 'var(--peach)' }}>↑</span> {formatBytes(t.bytes_up)}
+                  </div>
+                </div>
               </div>
               <div className="ml-9 mt-1.5 h-1.5 rounded-full overflow-hidden" style={{ background: 'oklch(0.20 0.04 275 / 0.6)' }}>
                 <div className="h-full transition-all rounded-full"
                   style={{ width: `${pct}%`, background: gradient, boxShadow: `0 0 12px -2px oklch(0.82 0.13 50 / ${0.3 + 0.4 * (pct / 100)})` }} />
-              </div>
-              <div className="ml-9 mt-1 flex gap-3 text-[10px]" style={{ color: 'var(--text-3)' }}>
-                <span><span style={{ color: 'var(--ice)' }}>↓</span> {formatBytes(t.bytes_down)}</span>
-                <span><span style={{ color: 'var(--peach)' }}>↑</span> {formatBytes(t.bytes_up)}</span>
               </div>
             </Link>
           );

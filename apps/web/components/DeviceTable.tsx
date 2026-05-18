@@ -193,13 +193,13 @@ export function DeviceTable() {
                   <div><span className="text-slate-500">↑ now:</span> <span className={d.online && d.up_speed_bps > 0 ? 'text-orange-400' : 'text-slate-600'}>{d.online ? formatBps(d.up_speed_bps) : '—'}</span></div>
                   <div>
                     <span className="text-slate-500">Today:</span>{' '}
-                    <span className="text-slate-200 font-medium">{formatBytes(d.bytes_today + d.bytes_up_today)}</span>
-                    <div className="text-[10px] text-slate-500">↓ {formatBytes(d.bytes_today, 0)} · ↑ {formatBytes(d.bytes_up_today, 0)}</div>
+                    <span className="text-slate-100 font-semibold">↓ {formatBytes(d.bytes_today)}</span>
+                    <div className="text-[10px] text-slate-500">↑ {formatBytes(d.bytes_up_today, 0)}</div>
                   </div>
                   <div>
                     <span className="text-slate-500">All-time:</span>{' '}
-                    <span className="text-slate-100 font-semibold">{formatBytes(d.bytes_total + d.bytes_up_total)}</span>
-                    <div className="text-[10px] text-slate-500">↓ {formatBytes(d.bytes_total, 0)} · ↑ {formatBytes(d.bytes_up_total, 0)}</div>
+                    <span className="text-slate-100 font-semibold">↓ {formatBytes(d.bytes_total)}</span>
+                    <div className="text-[10px] text-slate-500">↑ {formatBytes(d.bytes_up_total, 0)}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 mt-2">
@@ -281,15 +281,15 @@ export function DeviceTable() {
                   ) : <span className="text-slate-600">offline</span>}
                 </td>
                 <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-300', sort.key === 'today' && 'col-sorted font-semibold')}>
-                  <div className="leading-tight">
-                    <div className="text-slate-200 font-semibold">{formatBytes(d.bytes_today + d.bytes_up_today)}</div>
-                    <div className="text-[10px] text-slate-500">↓ {formatBytes(d.bytes_today, 0)} · ↑ {formatBytes(d.bytes_up_today, 0)}</div>
+                  <div className="leading-tight" title="Download is matched to the router's per-device counter. Upload is integrated from instant samples and reconciled against the WAN counter.">
+                    <div className="text-slate-100 font-semibold">↓ {formatBytes(d.bytes_today)}</div>
+                    <div className="text-[10px] text-slate-500">↑ {formatBytes(d.bytes_up_today, 0)}</div>
                   </div>
                 </td>
                 <td className={clsx('px-4 py-2.5 text-right tabular-nums text-slate-200 font-semibold', sort.key === 'total' && 'col-sorted')}>
                   <div className="leading-tight">
-                    <div className="text-slate-100">{formatBytes(d.bytes_total + d.bytes_up_total)}</div>
-                    <div className="text-[10px] text-slate-500 font-normal">↓ {formatBytes(d.bytes_total, 0)} · ↑ {formatBytes(d.bytes_up_total, 0)}</div>
+                    <div className="text-slate-100">↓ {formatBytes(d.bytes_total)}</div>
+                    <div className="text-[10px] text-slate-500 font-normal">↑ {formatBytes(d.bytes_up_total, 0)}</div>
                   </div>
                 </td>
                 <td className={clsx('px-4 py-2.5 text-right text-xs', sort.key === 'last_seen' && 'col-sorted')}>

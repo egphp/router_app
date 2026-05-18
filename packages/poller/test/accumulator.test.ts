@@ -35,6 +35,7 @@ function makeDb(): Database.Database {
 
 function device(
   mac: string,
+  // `onlineTime` is in MINUTES (the unit the Tenda firmware reports).
   opts: { up?: number; down?: number; sumKb: number; online?: 0 | 1; name?: string; onlineTime?: number } = { sumKb: 0 },
 ) {
   return {
@@ -136,6 +137,9 @@ test('open device session is created and accumulates traffic', () => {
 
   const row = db.prepare(`SELECT started_at, ended_at, bytes_down FROM device_sessions WHERE mac = ?`)
     .get('AA:BB:CC:00:00:01') as { started_at: number; ended_at: number | null; bytes_down: number };
+  // Tenda firmware reports onlineTime in MINUTES (the integer ticks once per
+  // wall-clock minute, verified empirically against the open session).
+  // started_at = now - onlineMinutes * 60_000.
   assert.equal(row.started_at, 1_000_000 - 2 * 60_000);
   assert.equal(row.ended_at, null);
   assert.equal(row.bytes_down, 10_100 * 1024);
@@ -239,14 +243,17 @@ test('implausibly large delta clamped to 0 with warning', () => {
   assert.equal(r.totalBytesDownDelta, 0, '>5GB jump rejected');
 });
 
-test('upload integration: bytes ≈ avg(prev_speed, now_speed) × dt, with KB/s units', () => {
+test('upload integration uses min(prev_speed, now_speed) × dt to avoid burst-peak overshoot', () => {
   const db = makeDb();
   const acc = new Accumulator(db);
   // Tenda reports speeds in KB/s (integer). Accumulator stores bytes/s internally.
+  // We use min-of-pair as a conservative lower-bound integrator. The trapezoidal
+  // mean used to extrapolate a single high sample over the whole interval, which
+  // could double the true bytes when bursts only existed at the sample instant.
   acc.process(1_000_000, [device('AA:BB:CC:00:00:01', { up: 1, sumKb: 0 })], false);
   const r = acc.process(1_030_000, [device('AA:BB:CC:00:00:01', { up: 3, sumKb: 0 })], false);
-  // avg(1, 3) KB/s = 2 KB/s = 2048 B/s; × 30s = 61440 bytes
-  assert.equal(r.totalBytesUpDelta, 2 * 1024 * 30);
+  // min(1, 3) KB/s = 1 KB/s = 1024 B/s; × 30s = 30720 bytes
+  assert.equal(r.totalBytesUpDelta, 1 * 1024 * 30);
 });
 
 test('5-minute speed averages include every sample once', () => {
