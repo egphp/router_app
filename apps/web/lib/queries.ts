@@ -989,6 +989,36 @@ export function getDeviceDailyUsage(mac: string, days = 30): Array<{
   });
 }
 
+export interface DeviceIpEntry {
+  ip: string;
+  samples: number;
+  first_seen: number;
+  last_seen: number;
+}
+
+/**
+ * Distinct IPs a device was ever observed on, with the sample count and the
+ * first/last timestamp it appeared at. Useful for surfacing IP roaming on
+ * devices with randomized MACs or DHCP renewals.
+ */
+export function getDeviceIpHistory(mac: string, limit = 50): DeviceIpEntry[] {
+  const c = db();
+  const rows = c.prepare(`
+    SELECT ip, COUNT(*) AS samples, MIN(ts) AS first_seen, MAX(ts) AS last_seen
+    FROM samples_raw
+    WHERE mac = ? AND ip IS NOT NULL AND ip != ''
+    GROUP BY ip
+    ORDER BY MAX(ts) DESC
+    LIMIT ?
+  `).all(mac, limit) as Array<{ ip: string; samples: number; first_seen: number; last_seen: number }>;
+  return rows.map((r) => ({
+    ip: r.ip,
+    samples: Number(r.samples ?? 0),
+    first_seen: Number(r.first_seen ?? 0),
+    last_seen: Number(r.last_seen ?? 0),
+  }));
+}
+
 export function getDeviceStats(mac: string) {
   const c = db();
   const allBytes = bytesSinceSql(0);

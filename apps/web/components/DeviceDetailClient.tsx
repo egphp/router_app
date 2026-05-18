@@ -4,6 +4,7 @@ import useSWR from 'swr';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 import { fetcher } from '../lib/fetcher';
 import { formatBps, formatBytes, formatMacShort, categoryIcon, categoryLabel, formatDuration, timeAgo } from '../lib/format';
+import { IpHistoryList, type IpHistoryEntry } from './SecurityFindingDetails';
 
 type Range = 'hour' | 'today' | 'week' | 'month' | 'year' | 'all';
 
@@ -72,6 +73,16 @@ export function DeviceDetailClient({ device, initialStats, initialSessions, dail
   const sessions = data?.sessions ?? initialSessions;
   const dailyRows = data?.dailyUsage ?? dailyUsage;
   const chartRange = selectedTrafficDay ? 'today' : range;
+
+  // IP history — every distinct IP this MAC was observed on, with sample counts
+  // and first/last seen. Useful for randomized-MAC devices that roam IPs across
+  // DHCP renewals.
+  const { data: ipHistoryData } = useSWR<{ history: IpHistoryEntry[] }>(
+    `/api/devices/${encodeURIComponent(device.mac)}/ip-history`,
+    fetcher,
+    { refreshInterval: 30000, keepPreviousData: true },
+  );
+  const ipHistory = ipHistoryData?.history ?? [];
 
   const chartData = useMemo(() => traffic.map((p) => ({
     t: formatBucket(p.bucket_ts, chartRange),
@@ -270,6 +281,17 @@ export function DeviceDetailClient({ device, initialStats, initialSessions, dail
             </div>
           </>
         )}
+      </div>
+
+      <div className="card p-5">
+        <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+          <div>
+            <div className="stat-label">IP history</div>
+            <div className="text-xs text-slate-500 mt-1">Every distinct IP this device has been observed on.</div>
+          </div>
+          <div className="text-xs text-slate-500">{ipHistory.length} {ipHistory.length === 1 ? 'IP' : 'IPs'}</div>
+        </div>
+        <IpHistoryList history={ipHistory} />
       </div>
 
       <div className="card p-5">

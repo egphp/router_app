@@ -4,6 +4,7 @@ import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
 import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter, Ban, ShieldAlert, Gauge } from 'lucide-react';
+import { AffectedDeviceList, type AffectedDevice } from '../../components/SecurityFindingDetails';
 
 interface Alert {
   id: number; kind: string; mac: string | null; payload: string | null;
@@ -135,9 +136,7 @@ export default function AlertsPage() {
                   )}
                 </div>
                 {payload?.message && <div className="text-sm mt-1 text-slate-300">{payload.message}</div>}
-                {payload?.detail && (
-                  <pre className="mt-2 text-[10px] text-slate-500 whitespace-pre-wrap font-mono">{JSON.stringify(payload.detail, null, 2)}</pre>
-                )}
+                {payload?.detail && <AlertDetailView alert={a} payload={payload} />}
               </div>
               {!isDismissed && (
                 <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
@@ -160,6 +159,68 @@ export default function AlertsPage() {
 }
 
 function safeParse(s: string): any { try { return JSON.parse(s); } catch { return null; } }
+
+/**
+ * Renders the structured payload.detail for known alert rules. Falls back to a
+ * JSON dump for rules we don't recognise so we never silently drop data.
+ */
+function AlertDetailView({ alert, payload }: { alert: Alert; payload: any }) {
+  const rule = payload?.rule;
+  const detail = payload?.detail ?? {};
+
+  // Per-device security findings: render a single-device card.
+  const perDeviceRules = new Set([
+    'random_mac_device',
+    'high_connection_count',
+    'high_upload',
+    'out_of_subnet',
+  ]);
+  if (rule && perDeviceRules.has(rule) && detail.mac) {
+    const device: AffectedDevice = {
+      mac: detail.mac,
+      ip: detail.ip ?? null,
+      hostname: detail.hostname ?? null,
+      router_remark: detail.router_remark ?? alert.device_label ?? null,
+      vendor: detail.vendor ?? null,
+      category: detail.category ?? null,
+    };
+    const extra =
+      rule === 'high_connection_count' && detail.connections != null
+        ? `${detail.connections} connections`
+        : rule === 'high_upload' && detail.up_human
+        ? `Uploading ${detail.up_human}`
+        : rule === 'out_of_subnet' && detail.expected_subnet
+        ? `Expected subnet ${detail.expected_subnet}`
+        : null;
+    return (
+      <div className="mt-2">
+        <AffectedDeviceList devices={[device]} />
+        {extra && <div className="mt-1 text-[10px] text-slate-500">{extra}</div>}
+      </div>
+    );
+  }
+
+  // hostname_clones: show the shared hostname + all colliding devices.
+  if (rule === 'hostname_clones' && Array.isArray(detail.devices)) {
+    return (
+      <div className="mt-2">
+        {detail.hostname && (
+          <div className="text-xs text-slate-400 mb-1">
+            Sharing hostname <code className="bg-bg-elevated px-1.5 py-0.5 rounded">{detail.hostname}</code>
+          </div>
+        )}
+        <AffectedDeviceList devices={detail.devices as AffectedDevice[]} />
+      </div>
+    );
+  }
+
+  // Fallback: render raw JSON so nothing is hidden.
+  return (
+    <pre className="mt-2 text-[10px] text-slate-500 whitespace-pre-wrap font-mono">
+      {JSON.stringify(detail, null, 2)}
+    </pre>
+  );
+}
 
 function titleFor(a: Alert, payload: any): string {
   switch (a.kind) {

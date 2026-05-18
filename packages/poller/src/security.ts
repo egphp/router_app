@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { RouterDevice } from '@tenda/shared';
-import { insertAlertIfAllowed } from '@tenda/shared';
+import { insertAlertIfAllowed, lookupOui } from '@tenda/shared';
 import { log } from './logger.js';
 
 export interface SecurityCheck {
@@ -11,14 +11,46 @@ export interface SecurityCheck {
   detail?: any;
 }
 
+/** Shape of one device entry we include in alert payloads. */
+interface AffectedDevice {
+  mac: string;
+  ip: string | null;
+  hostname: string | null;
+  router_remark: string | null;
+  vendor: string | null;
+  category: string | null;
+  connect_type: number | null;
+}
+
+function describeDevice(d: any): AffectedDevice {
+  const mac = String(d.hostMAC || '').toUpperCase();
+  const oui = mac ? lookupOui(mac) : { vendor: null as any, category: null as any };
+  return {
+    mac,
+    ip: d.hostIP ?? null,
+    hostname: d.hostName ?? null,
+    router_remark: d.hostRemark ?? null,
+    vendor: oui.vendor ?? null,
+    category: oui.category ?? null,
+    connect_type: d.hostConnectType ?? null,
+  };
+}
+
+function deviceLabel(d: any): string {
+  return d.hostRemark || d.hostName || d.hostMAC || '';
+}
+
 /**
  * Heuristic security checks that run each cycle. We can't do real IDS without packet
  * inspection — these are pattern-based flags computed from the data we already have.
+ *
+ * Every finding now carries the affected device's full context (MAC, IP, hostname,
+ * vendor, category) inside `detail`, so the UI can show the user *who* triggered the
+ * rule instead of an opaque "N devices …" banner.
  */
 export class SecurityScanner {
   private insertAlert: Database.Statement;
   private findRecentAlert: Database.Statement;
-  private knownLocallyAdministered = new Set<string>();
   // After a user dismisses an alert we suppress the same rule+mac for this long.
   // Keeps the page from becoming spam when the underlying condition (e.g. Mac
   // Studio always has lots of connections) is permanent.
@@ -51,8 +83,11 @@ export class SecurityScanner {
           rule: 'high_connection_count',
           severity: conn >= 500 ? 'critical' : 'warn',
           mac: d.hostMAC,
-          message: `Device "${d.hostName || d.hostMAC}" has ${conn} concurrent connections`,
-          detail: { connections: conn, ip: d.hostIP },
+          message: `${deviceLabel(d)} has ${conn} concurrent connections`,
+          detail: {
+            connections: conn,
+            ...describeDevice(d),
+          },
         });
       }
     }
@@ -66,29 +101,31 @@ export class SecurityScanner {
           rule: 'high_upload',
           severity: up > 20 * 1024 * 1024 ? 'critical' : 'warn',
           mac: d.hostMAC,
-          message: `Device "${d.hostName || d.hostMAC}" uploading at ${(up / 1024 / 1024).toFixed(1)} MB/s`,
-          detail: { up_bps: up, ip: d.hostIP },
+          message: `${deviceLabel(d)} uploading at ${(up / 1024 / 1024).toFixed(1)} MB/s`,
+          detail: {
+            up_bps: up,
+            up_human: `${(up / 1024 / 1024).toFixed(1)} MB/s`,
+            ...describeDevice(d),
+          },
         });
       }
     }
 
     // 3. Locally-administered MAC = device with randomized/spoofed address.
-    //    Single such device is normal (iOS/Android private MAC). Many such = suspicious.
-    let randomMacCount = 0;
+    //    iOS/Android private MAC. We emit one info-level finding *per device*, so
+    //    the security page lists exactly which MACs are randomized, and dedupe
+    //    keeps each MAC from re-firing once acknowledged.
     for (const d of devices as any[]) {
-      const first = parseInt((d.hostMAC || '00').slice(0, 2), 16);
-      if (!Number.isNaN(first) && (first & 0x02)) {
-        randomMacCount++;
-        this.knownLocallyAdministered.add(d.hostMAC);
-      }
-    }
-    if (randomMacCount >= 8) {
+      const mac = String(d.hostMAC || '');
+      if (!mac) continue;
+      const first = parseInt(mac.slice(0, 2), 16);
+      if (Number.isNaN(first) || !(first & 0x02)) continue;
       out.push({
-        rule: 'many_random_macs',
+        rule: 'random_mac_device',
         severity: 'info',
-        mac: null,
-        message: `${randomMacCount} devices use randomized MAC addresses (normal for modern phones)`,
-        detail: { count: randomMacCount },
+        mac,
+        message: `${deviceLabel(d)} uses a randomized MAC address`,
+        detail: describeDevice(d),
       });
     }
 
@@ -108,7 +145,13 @@ export class SecurityScanner {
           severity: 'warn',
           mac: null,
           message: `${arr.length} devices share hostname "${name}"`,
-          detail: { hostname: name, macs: arr.map((x) => x.hostMAC) },
+          detail: {
+            hostname: name,
+            count: arr.length,
+            // Keep legacy `macs` for any external consumer; add structured list too.
+            macs: arr.map((x) => x.hostMAC),
+            devices: arr.map(describeDevice),
+          },
         });
       }
     }
@@ -124,6 +167,7 @@ export class SecurityScanner {
     const dominant = [...subnetCounts.entries()].sort((a, b) => b[1] - a[1])[0];
     if (dominant && dominant[1] >= 3) {
       const lanPrefix = dominant[0] + '.';
+      const expectedSubnet = dominant[0] + '.0/24';
       for (const d of onlineDevices) {
         const ip = d.hostIP || '';
         if (ip && !ip.startsWith(lanPrefix)) {
@@ -131,8 +175,15 @@ export class SecurityScanner {
             rule: 'out_of_subnet',
             severity: 'warn',
             mac: d.hostMAC,
-            message: `Device "${d.hostName || d.hostMAC}" reports IP ${ip} outside the LAN subnet (${dominant[0]}.x)`,
-            detail: { ip, mac: d.hostMAC, lan: dominant[0] + '.0/24' },
+            message: `${deviceLabel(d)} reports IP ${ip} outside the LAN subnet (${dominant[0]}.x)`,
+            detail: {
+              ...describeDevice(d),
+              // Override the device IP with the reported (out-of-subnet) one for clarity.
+              ip,
+              expected_subnet: expectedSubnet,
+              // Legacy field for any older UI: keep `lan` for backwards-compat.
+              lan: expectedSubnet,
+            },
           });
         }
       }

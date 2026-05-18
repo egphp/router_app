@@ -2,8 +2,9 @@
 import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
-import { Shield, AlertTriangle, RefreshCw, FileText, Wifi } from 'lucide-react';
+import { Shield, AlertTriangle, RefreshCw, FileText, Wifi, ChevronDown, ChevronRight } from 'lucide-react';
 import { formatMacShort, timeAgo } from '../../lib/format';
+import { AffectedDeviceList, type AffectedDevice } from '../../components/SecurityFindingDetails';
 
 interface Alert {
   id: number; kind: string; mac: string | null; payload: string | null;
@@ -23,18 +24,47 @@ export default function SecurityPage() {
     (alerts?.alerts ?? []).filter((a) => a.kind === 'security' && !a.dismissed_at),
     [alerts]
   );
-  const grouped = useMemo(() => {
-    const g: Record<string, { count: number; severity: string; latest: number; example: any }> = {};
+
+  interface FindingEntry {
+    alertId: number;
+    mac: string | null;
+    deviceLabel: string | null;
+    message: string;
+    detail: any;
+    createdAt: number;
+  }
+  interface FindingGroup {
+    rule: string;
+    severity: string;
+    latest: number;
+    entries: FindingEntry[];
+  }
+  const grouped = useMemo<FindingGroup[]>(() => {
+    const g: Record<string, FindingGroup> = {};
     for (const a of securityAlerts) {
       const p = a.payload ? safeParse(a.payload) : null;
       const rule = p?.rule ?? 'unknown';
-      const e = g[rule] ?? { count: 0, severity: p?.severity ?? 'info', latest: 0, example: p };
-      e.count++;
-      e.latest = Math.max(e.latest, a.created_at);
-      g[rule] = e;
+      const entry: FindingEntry = {
+        alertId: a.id,
+        mac: a.mac,
+        deviceLabel: a.device_label,
+        message: p?.message ?? rule,
+        detail: p?.detail ?? null,
+        createdAt: a.created_at,
+      };
+      const bucket = g[rule] ?? { rule, severity: p?.severity ?? 'info', latest: 0, entries: [] };
+      bucket.entries.push(entry);
+      bucket.latest = Math.max(bucket.latest, a.created_at);
+      // promote severity if any entry is more severe
+      if (p?.severity === 'critical') bucket.severity = 'critical';
+      else if (p?.severity === 'warn' && bucket.severity === 'info') bucket.severity = 'warn';
+      g[rule] = bucket;
     }
-    return Object.entries(g).map(([rule, info]) => ({ rule, ...info }));
+    return Object.values(g).sort((a, b) => b.latest - a.latest);
   }, [securityAlerts]);
+
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (rule: string) => setExpanded((s) => ({ ...s, [rule]: !s[rule] }));
 
   const lines = log?.lines ?? [];
 
@@ -54,7 +84,7 @@ export default function SecurityPage() {
           <Rule name="high_upload" desc="Device sustaining 5+ MB/s outbound (data exfiltration, botnet, backup)." />
           <Rule name="hostname_clones" desc="3+ devices broadcasting the same hostname (impersonation)." />
           <Rule name="out_of_subnet" desc="Device reports IP outside the LAN subnet (misconfig or routing attack)." />
-          <Rule name="many_random_macs" desc="8+ devices with randomized MACs (normal for modern phones)." />
+          <Rule name="random_mac_device" desc="Device uses a randomized/locally-administered MAC address (normal for modern phones; one info finding per device, dismiss to silence)." />
         </ul>
       </div>
 
@@ -67,21 +97,36 @@ export default function SecurityPage() {
           <div className="text-sm text-slate-500 text-center py-6">No security findings. The network looks normal.</div>
         ) : (
           <div className="space-y-2">
-            {grouped.map((g) => (
-              <div key={g.rule} className={`px-3 py-2.5 rounded border-l-4 ${
+            {grouped.map((g) => {
+              const isOpen = !!expanded[g.rule];
+              const tone =
                 g.severity === 'critical' ? 'bg-accent-red/10 border-l-accent-red' :
                 g.severity === 'warn' ? 'bg-accent-amber/10 border-l-accent-amber' :
-                'bg-accent/10 border-l-accent'
-              }`}>
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">{g.rule.replace(/_/g, ' ')}</span>
-                  <span className="text-xs uppercase tracking-wide font-semibold">{g.severity}</span>
+                'bg-accent/10 border-l-accent';
+              return (
+                <div key={g.rule} className={`rounded border-l-4 ${tone}`}>
+                  <button
+                    type="button"
+                    onClick={() => toggle(g.rule)}
+                    className="w-full text-left px-3 py-2.5 hover:bg-bg-elevated/30 transition flex items-center gap-2"
+                  >
+                    <span className="text-slate-500">
+                      {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">{g.rule.replace(/_/g, ' ')}</span>
+                        <span className="text-xs uppercase tracking-wide font-semibold">{g.severity}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        {g.entries.length} {g.entries.length > 1 ? 'devices' : 'device'} affected · latest {timeAgo(g.latest)}
+                      </div>
+                    </div>
+                  </button>
+                  {isOpen && <FindingDetails group={g} />}
                 </div>
-                <div className="text-xs text-slate-400 mt-0.5">
-                  {g.count} occurrence{g.count > 1 ? 's' : ''} · latest {timeAgo(g.latest)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -155,6 +200,97 @@ export default function SecurityPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+interface FindingGroup {
+  rule: string;
+  severity: string;
+  latest: number;
+  entries: Array<{
+    alertId: number;
+    mac: string | null;
+    deviceLabel: string | null;
+    message: string;
+    detail: any;
+    createdAt: number;
+  }>;
+}
+
+/**
+ * Render the affected-device list for a finding group. Picks the right shape
+ * based on the rule (random_mac_device is per-device, hostname_clones groups
+ * many MACs under one alert).
+ */
+function FindingDetails({ group }: { group: FindingGroup }) {
+  // hostname_clones: one alert holds many MACs in detail.devices
+  if (group.rule === 'hostname_clones') {
+    const devices: AffectedDevice[] = [];
+    for (const e of group.entries) {
+      const list: AffectedDevice[] = e.detail?.devices ?? [];
+      for (const d of list) devices.push(d);
+    }
+    const hostname = group.entries[0]?.detail?.hostname;
+    return (
+      <div className="px-3 pb-3">
+        {hostname && (
+          <div className="text-xs text-slate-400 mb-2">
+            Sharing hostname <code className="bg-bg-elevated px-1.5 py-0.5 rounded">{hostname}</code>
+          </div>
+        )}
+        <AffectedDeviceList devices={devices} emptyHint="No device list available for this finding." />
+      </div>
+    );
+  }
+
+  // random_mac_device, high_connection_count, high_upload, out_of_subnet:
+  // each entry IS a single device — collect them and render.
+  const devices: AffectedDevice[] = group.entries.map((e) => {
+    const detail = e.detail ?? {};
+    return {
+      mac: detail.mac ?? e.mac ?? '',
+      ip: detail.ip ?? null,
+      hostname: detail.hostname ?? null,
+      router_remark: detail.router_remark ?? e.deviceLabel,
+      vendor: detail.vendor ?? null,
+      category: detail.category ?? null,
+    };
+  }).filter((d) => d.mac);
+
+  // Per-entry extra context (e.g. connection count, upload speed)
+  const extras: Record<string, string> = {};
+  for (const e of group.entries) {
+    if (!e.mac || !e.detail) continue;
+    if (group.rule === 'high_connection_count' && e.detail.connections != null) {
+      extras[e.mac] = `${e.detail.connections} connections`;
+    } else if (group.rule === 'high_upload' && e.detail.up_human) {
+      extras[e.mac] = e.detail.up_human;
+    } else if (group.rule === 'out_of_subnet' && e.detail.expected_subnet) {
+      extras[e.mac] = `expected ${e.detail.expected_subnet}`;
+    }
+  }
+
+  return (
+    <div className="px-3 pb-3">
+      {devices.length === 0 ? (
+        <div className="text-xs text-slate-500 italic">
+          This finding has no device details (older format). Newer findings will list every MAC.
+        </div>
+      ) : (
+        <>
+          <AffectedDeviceList devices={devices} />
+          {Object.keys(extras).length > 0 && (
+            <div className="mt-2 text-[10px] text-slate-500">
+              {Object.entries(extras).map(([mac, text]) => (
+                <div key={mac} className="font-mono">
+                  {formatMacShort(mac)} · {text}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
