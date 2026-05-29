@@ -8,7 +8,7 @@
     <key>ProgramArguments</key>
     <array>
       <string>/usr/local/bin/node</string>
-      <string>/Users/michaeltawfik/Documents/tenda_traffic/deploy/syslog-relay.js</string>
+      <string>/Users/michaeltawfik/dev/tenda_traffic/deploy/syslog-relay.js</string>
     </array>
 
     <key>EnvironmentVariables</key>

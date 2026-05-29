@@ -8,11 +8,11 @@
     <key>ProgramArguments</key>
     <array>
       <string>/usr/local/bin/node</string>
-      <string>/Users/michaeltawfik/Documents/tenda_traffic/packages/poller/dist/index.js</string>
+      <string>/Users/michaeltawfik/dev/tenda_traffic/packages/poller/dist/index.js</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/michaeltawfik/Documents/tenda_traffic</string>
+    <string>/Users/michaeltawfik/dev/tenda_traffic</string>
 
     <key>EnvironmentVariables</key>
     <dict>

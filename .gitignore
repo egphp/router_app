@@ -16,3 +16,4 @@ coverage
 # Screenshots from manual testing
 /*.png
 *.jpeg
+apps/web/tenda.db.stray-empty-*
