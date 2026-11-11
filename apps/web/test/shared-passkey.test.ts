@@ -268,6 +268,47 @@ describe('panel session: 400 days, sliding on a visit', () => {
   });
 });
 
+describe('panel session: logout is never slid', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('a session due for a slide + a logout request: no refreshed cookie, stored expiry not extended; a normal visit does slide', async () => {
+    process.env.ROUTER_PASSWORD = process.env.ROUTER_PASSWORD || 'x';
+    const { NextRequest } = await import('next/server');
+    const { middleware } = await import(path.join(SRC, 'middleware.ts'));
+    writeShared();
+    const rp = remote.resolveRelyingParty(makeReq({ port: '2055' }));
+    const issued = remote.createPanelSessionCookie({ credentialId: credId, rpId: rp.rpID, req: makeReq({ port: '2055' }) });
+    const rawToken = issued.split('.')[1]!;
+    const hash = remote.sha256Hex(rawToken);
+    const oldExp = Date.now() + 10 * DAY; // an old-style session: due for a slide
+    getDb().prepare('UPDATE panel_sessions SET expires_at = ? WHERE session_id_hash = ?').run(oldExp, hash);
+    const body = `v2.${rawToken}.${oldExp}`;
+    const dueCookie = `${body}.${remote.hmacSign(body)}`;
+    const mk = (method: string, p: string) =>
+      new NextRequest(`https://tv-eg.com:2055${p}`, {
+        method,
+        headers: {
+          host: 'tv-eg.com:2055',
+          'x-forwarded-proto': 'https',
+          origin: 'https://tv-eg.com:2055',
+          cookie: `${remote.PANEL_COOKIE}=${encodeURIComponent(dueCookie)}`,
+        },
+      });
+    const expiryOf = () =>
+      (getDb().prepare('SELECT expires_at FROM panel_sessions WHERE session_id_hash = ?').get(hash) as { expires_at: number }).expires_at;
+    const sessionCookies = (res: Response) =>
+      (res.headers.getSetCookie?.() ?? []).filter((c: string) => c.startsWith(`${remote.PANEL_COOKIE}=`));
+
+    const out = middleware(mk('POST', '/api/auth/logout'));
+    assert.equal(sessionCookies(out).length, 0, 'logout carries no session cookie from the middleware');
+    assert.equal(expiryOf(), oldExp, 'logout did not extend the stored expiry');
+
+    const visit = middleware(mk('GET', '/api/status'));
+    assert.equal(sessionCookies(visit).length, 1, 'a normal visit re-sends the cookie');
+    assert.ok(expiryOf() > Date.now() + 399 * DAY, 'a normal visit slides the stored expiry');
+  });
+});
+
 describe('shared owner passkey: enrolment is closed', () => {
   it('register options, register verify and enroll-token answer 410 enrol_closed', async () => {
     writeShared();
