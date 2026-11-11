@@ -15,7 +15,9 @@ export const PANEL_COOKIE = 'tenda_panel_session';
 export const PANEL_CSRF_COOKIE = 'tenda_panel_csrf';
 export const PANEL_WEBAUTHN_CHALLENGE_COOKIE = 'tenda_webauthn_chal';
 
-export const PANEL_SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60; // 14 days
+export const PANEL_SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60; // 400 days, sliding
+// A session (database expiry and the signed cookie) is extended when it was last extended more than this long ago.
+export const PANEL_SESSION_SLIDE_AFTER_MS = 24 * 60 * 60 * 1000;
 export const CHALLENGE_TTL_SECONDS = 120; // 2 minutes strict anti-replay window
 export const ENROLLMENT_TTL_MS = 5 * 60 * 1000; // 5 minutes one-time pairing window
 
@@ -476,20 +478,25 @@ export interface VerifiedPanelSession {
   credentialId: string;
   rpId: string;
   expiresAt: number;
+  /** Set only when called with `slide`: a freshly signed cookie value the response must carry. */
+  refreshedCookie?: string;
 }
 
-export function verifyAuthenticatedSession(req: Request | NextRequest): VerifiedPanelSession | null {
+export function verifyAuthenticatedSession(
+  req: Request | NextRequest,
+  opts: { slide?: boolean } = {},
+): VerifiedPanelSession | null {
   const cookieValue = readRequestCookie(req, PANEL_COOKIE);
   if (!cookieValue) return null;
 
   const parts = cookieValue.split('.');
   if (parts.length !== 4 || parts[0] !== 'v2') return null;
   const rawToken = parts[1]!;
-  const expiresAt = Number(parts[2]);
+  const cookieExpiresAt = Number(parts[2]);
   const signature = parts[3]!;
   const now = Date.now();
 
-  if (!rawToken || rawToken.length < 32 || !Number.isFinite(expiresAt) || expiresAt <= now) {
+  if (!rawToken || rawToken.length < 32 || !Number.isFinite(cookieExpiresAt) || cookieExpiresAt <= now) {
     return null;
   }
 
@@ -540,11 +547,40 @@ export function verifyAuthenticatedSession(req: Request | NextRequest): Verified
     }
   }
 
+  let expiresAt = row.expires_at;
+  let refreshedCookie: string | undefined;
+  if (opts.slide) {
+    // Slide: the stored expiry and the signed cookie each move forward once their last extension is a day old.
+    // The last extension time is the expiry minus the full lifetime, so no extra column is needed, and a
+    // session signed with the old 14-day lifetime counts as due and is replaced on its next visit.
+    const fullMs = PANEL_SESSION_MAX_AGE_SECONDS * 1000;
+    const dueBeforeMs = fullMs - PANEL_SESSION_SLIDE_AFTER_MS;
+    const dbDue = row.expires_at - now < dueBeforeMs;
+    const cookieDue = cookieExpiresAt - now < dueBeforeMs;
+    if (dbDue || cookieDue) {
+      if (dbDue) {
+        try {
+          const upd = db
+            .prepare(`UPDATE panel_sessions SET expires_at = ? WHERE session_id_hash = ? AND revoked_at IS NULL`)
+            .run(now + fullMs, sessionIdHash);
+          if (upd.changes > 0) expiresAt = now + fullMs;
+        } catch {
+          // Keep the stored expiry; the cookie below never outlives it.
+        }
+      }
+      if (expiresAt > cookieExpiresAt) {
+        const body = `v2.${rawToken}.${expiresAt}`;
+        refreshedCookie = `${body}.${hmacSign(body)}`;
+      }
+    }
+  }
+
   return {
     sessionIdHash: row.session_id_hash,
     credentialId: row.credential_id,
     rpId: row.rp_id,
-    expiresAt: row.expires_at,
+    expiresAt,
+    ...(refreshedCookie ? { refreshedCookie } : {}),
   };
 }
 

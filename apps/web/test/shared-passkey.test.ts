@@ -203,6 +203,71 @@ describe('shared owner passkey: sessions', () => {
   });
 });
 
+describe('panel session: 400 days, sliding on a visit', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const cookieFrom = (v: string) =>
+    makeReq({ port: '2055', cookie: `${remote.PANEL_COOKIE}=${encodeURIComponent(v)}`, method: 'GET' });
+  const expiryOf = (hash: string) =>
+    (getDb().prepare('SELECT expires_at FROM panel_sessions WHERE session_id_hash = ?').get(hash) as { expires_at: number }).expires_at;
+
+  it('lifetime is 400 days', () => {
+    assert.equal(remote.PANEL_SESSION_MAX_AGE_SECONDS, 400 * 24 * 60 * 60);
+  });
+
+  it('a live session signed with the old 14-day expiry keeps working and is replaced by a 400-day one', () => {
+    writeShared();
+    const rp = remote.resolveRelyingParty(makeReq({ port: '2055' }));
+    const issued = remote.createPanelSessionCookie({ credentialId: credId, rpId: rp.rpID, req: makeReq({ port: '2055' }) });
+    const rawToken = issued.split('.')[1]!;
+    const hash = remote.sha256Hex(rawToken);
+    // Rewind it to what an old session looks like: 10 days left, cookie signed with that expiry.
+    const oldExp = Date.now() + 10 * DAY;
+    getDb().prepare('UPDATE panel_sessions SET expires_at = ? WHERE session_id_hash = ?').run(oldExp, hash);
+    const oldBody = `v2.${rawToken}.${oldExp}`;
+    const oldCookie = `${oldBody}.${remote.hmacSign(oldBody)}`;
+
+    const plain = remote.verifyAuthenticatedSession(cookieFrom(oldCookie));
+    assert.ok(plain, 'old cookie still valid without a slide');
+    assert.equal(plain.refreshedCookie, undefined);
+    assert.equal(expiryOf(hash), oldExp, 'a plain check never writes');
+
+    const slid = remote.verifyAuthenticatedSession(cookieFrom(oldCookie), { slide: true });
+    assert.ok(slid, 'old cookie valid on its visit');
+    assert.ok(slid.refreshedCookie, 'a new cookie is minted');
+    assert.ok(expiryOf(hash) > Date.now() + 399 * DAY, 'database expiry moved to about 400 days');
+    const fresh = remote.verifyAuthenticatedSession(cookieFrom(slid.refreshedCookie!));
+    assert.ok(fresh, 'the new cookie validates');
+    assert.ok(Number(slid.refreshedCookie!.split('.')[2]) > Date.now() + 399 * DAY, 'cookie signed with about 400 days');
+    assert.ok(fresh.expiresAt > Date.now() + 399 * DAY);
+
+    // Visited again straight away: nothing to extend, nothing written, no cookie sent.
+    const again = remote.verifyAuthenticatedSession(cookieFrom(slid.refreshedCookie!), { slide: true });
+    assert.ok(again);
+    assert.equal(again.refreshedCookie, undefined);
+  });
+
+  it('a cookie a day behind the database is refreshed even when the database is current', () => {
+    writeShared();
+    const rp = remote.resolveRelyingParty(makeReq({ port: '2055' }));
+    const issued = remote.createPanelSessionCookie({ credentialId: credId, rpId: rp.rpID, req: makeReq({ port: '2055' }) });
+    const rawToken = issued.split('.')[1]!;
+    const staleExp = Date.now() + 300 * DAY;
+    const body = `v2.${rawToken}.${staleExp}`;
+    const staleCookie = `${body}.${remote.hmacSign(body)}`;
+    const slid = remote.verifyAuthenticatedSession(cookieFrom(staleCookie), { slide: true });
+    assert.ok(slid?.refreshedCookie, 'stale cookie replaced');
+    assert.ok(Number(slid!.refreshedCookie!.split('.')[2]) > staleExp);
+  });
+
+  it('a revoked session is never slid', () => {
+    writeShared();
+    const rp = remote.resolveRelyingParty(makeReq({ port: '2055' }));
+    const issued = remote.createPanelSessionCookie({ credentialId: credId, rpId: rp.rpID, req: makeReq({ port: '2055' }) });
+    getDb().prepare('UPDATE panel_sessions SET revoked_at = ? WHERE session_id_hash = ?').run(Date.now(), remote.sha256Hex(issued.split('.')[1]!));
+    assert.equal(remote.verifyAuthenticatedSession(cookieFrom(issued), { slide: true }), null);
+  });
+});
+
 describe('shared owner passkey: enrolment is closed', () => {
   it('register options, register verify and enroll-token answer 410 enrol_closed', async () => {
     writeShared();

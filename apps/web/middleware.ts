@@ -8,12 +8,13 @@ import {
   clientRateLimitScope,
   extractHostWithoutPort,
   hasSmuggledInternalHeaders,
-  isAuthenticatedRequest,
   logSecurityEvent,
   readRequestCookie,
   resolveRelyingParty,
   safeNextPath,
   secureCookieForRequest,
+  setPanelSessionCookie,
+  verifyAuthenticatedSession,
   verifySameOriginRequest,
 } from './lib/remote-auth';
 
@@ -108,7 +109,8 @@ export function middleware(req: NextRequest) {
 
   // Zero-Trust Biometric Gate: EVERY browser & API call (local, LAN, Safari, Chrome, mobile, remote)
   // MUST present an active biometric session backed by a non-revoked Passkey in SQLite.
-  if (!isAuthenticatedRequest(req)) {
+  const verified = verifyAuthenticatedSession(req, { slide: true });
+  if (!verified) {
     const hadStaleCookie = Boolean(readRequestCookie(req, PANEL_COOKIE));
     const secure = secureCookieForRequest(req);
     if (pathname.startsWith('/api/')) {
@@ -124,23 +126,29 @@ export function middleware(req: NextRequest) {
     return applySecurityHeaders(res, req);
   }
 
+  // Every authenticated response carries the re-signed cookie when the session was slid.
+  const finish = (res: NextResponse): NextResponse => {
+    if (verified.refreshedCookie) {
+      setPanelSessionCookie(res, verified.refreshedCookie, secureCookieForRequest(req));
+    }
+    return applySecurityHeaders(res, req);
+  };
+
   const configured = isConfigured();
 
   if (configured) {
-    return applySecurityHeaders(NextResponse.next(), req);
+    return finish(NextResponse.next());
   }
   if (pathname === '/setup' || pathname === '/api/settings' || pathname === '/api/setup-status' || pathname === '/api/detect-router') {
-    return applySecurityHeaders(NextResponse.next(), req);
+    return finish(NextResponse.next());
   }
   if (pathname.startsWith('/api/')) {
-    return applySecurityHeaders(
-      NextResponse.json({ ok: false, error: 'router setup required' }, { status: 428 }),
-      req,
-    );
+    return finish(
+      NextResponse.json({ ok: false, error: 'router setup required' }, { status: 428 }));
   }
   const url = req.nextUrl.clone();
   url.pathname = '/setup';
-  return applySecurityHeaders(NextResponse.redirect(url), req);
+  return finish(NextResponse.redirect(url));
 }
 
 function isPublicPath(pathname: string): boolean {
