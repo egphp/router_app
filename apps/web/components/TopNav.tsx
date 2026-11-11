@@ -4,8 +4,9 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
   Bell, AlertTriangle, Cog, LayoutDashboard, ListTree, BarChart3, Shield,
-  Receipt, Calendar, ShieldAlert, Network, Download, Menu, X,
+  Receipt, Calendar, ShieldAlert, Network, Download, Menu, X, Lock,
 } from 'lucide-react';
+import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
 
@@ -31,8 +32,35 @@ export function TopNav() {
   const { data: status } = useSWR<{ connected: boolean; alerts: number }>(
     isSetup ? null : '/api/status', fetcher, { refreshInterval: 5000 }
   );
+  const { data: authInfo } = useSWR<{ authenticated?: boolean; totalPasskeyCount?: number }>(
+    isSetup ? null : '/api/auth/passkey/status',
+    fetcher,
+    { refreshInterval: 8000, revalidateOnFocus: true }
+  );
   const connected = status?.connected ?? false;
   const alerts = status?.alerts ?? 0;
+
+  const lockSession = async (reason?: string) => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      window.location.replace(reason ? `/login?reason=${encodeURIComponent(reason)}` : '/login');
+    }
+  };
+
+  // Auto-logout immediately if the session is revoked or the shared passkey file is gone
+  useEffect(() => {
+    if (isSetup) return;
+    if (authInfo && (authInfo.authenticated === false || (authInfo.totalPasskeyCount ?? 1) === 0)) {
+      window.location.replace('/login');
+      return;
+    }
+    // No platform-sensor check: the shared passkey also signs in through the phone
+    // (hybrid), so a browser without Touch ID / Face ID must never be logged out here.
+    if (!browserSupportsWebAuthn()) {
+      void lockSession('no_biometric');
+    }
+  }, [isSetup, authInfo]);
 
   useEffect(() => { setOpen(false); }, [pathname]);
   useEffect(() => {
@@ -115,6 +143,14 @@ export function TopNav() {
               </Link>
             )}
 
+              <button
+                type="button"
+                onClick={() => void lockSession()}
+                title="قفل الجلسة البيومترية (Logout)"
+                className="p-2 rounded-xl hover:bg-bg-elevated/60 text-text-secondary hover:text-text-primary transition"
+              >
+                <Lock size={17} />
+              </button>
             <div className="hidden sm:flex items-center gap-2 text-xs px-3 py-1.5 rounded-full"
               style={{ background: connected ? 'var(--mint-soft)' : 'var(--coral-soft)', border: `1.5px solid ${connected ? 'oklch(0.85 0.13 165 / 0.35)' : 'oklch(0.74 0.18 25 / 0.35)'}` }}>
               <span className={connected ? 'live-dot' : 'w-1.5 h-1.5 rounded-full bg-accent-coral'} />

@@ -2,7 +2,23 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../lib/fetcher';
-import { Eye, EyeOff, Shield, CheckCircle2, AlertCircle, Save, Loader, ShieldAlert, KeyRound, BellRing, X, Gauge, Trash2 } from 'lucide-react';
+import {
+  Eye,
+  EyeOff,
+  Shield,
+  CheckCircle2,
+  AlertCircle,
+  Save,
+  Loader,
+  ShieldAlert,
+  BellRing,
+  X,
+  Gauge,
+  Trash2,
+  Fingerprint,
+  ShieldCheck,
+  LogOut,
+} from 'lucide-react';
 
 interface Settings {
   routerHost: string;
@@ -202,99 +218,190 @@ export function SettingsClient() {
   );
 }
 
+interface StoredPasskeyItem {
+  id: string;
+  idPreview: string;
+  rpId: string;
+  origin: string;
+  label: string;
+  deviceType: string;
+  backedUp: boolean;
+  aaguid: string | null;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+interface SecurityEventItem {
+  id: number;
+  eventType: string;
+  rpId: string | null;
+  credentialPreview: string | null;
+  detail: string | null;
+  createdAt: number;
+}
+
+interface PasskeyManagementResponse {
+  ok: boolean;
+  rpID: string;
+  origin: string;
+  isSecureOrigin: boolean;
+  isWebAuthnDomain: boolean;
+  isLocalOrLan: boolean;
+  authenticated: boolean;
+  credentials: StoredPasskeyItem[];
+  activeSessions: number;
+  recentEvents: SecurityEventItem[];
+}
+
 function RemotePanelAccessCard() {
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [showPwd, setShowPwd] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const { data, mutate } = useSWR<PasskeyManagementResponse>('/api/auth/passkey/credentials', fetcher, {
+    refreshInterval: 15000,
+  });
+  const [busy, setBusy] = useState<string | null>(null);
+  const [auditOpen, setAuditOpen] = useState(false);
   const [result, setResult] = useState<null | { kind: 'ok' | 'err'; msg: string }>(null);
 
-  const save = async () => {
+  const revokeAllSessions = async () => {
+    setBusy('revoke-sessions');
     setResult(null);
-    if (password.length < 10) {
-      setResult({ kind: 'err', msg: 'Use at least 10 characters.' });
-      return;
-    }
-    if (password !== confirm) {
-      setResult({ kind: 'err', msg: 'Passwords do not match.' });
-      return;
-    }
-    setBusy(true);
     try {
-      const r = await fetch('/api/auth/password', {
-        method: 'POST',
+      const r = await fetch('/api/auth/passkey/credentials', {
+        method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ action: 'revoke_all_sessions' }),
       });
       const j = await r.json();
       if (!r.ok || !j.ok) {
-        setResult({ kind: 'err', msg: j.error || 'Could not save panel password.' });
+        setResult({ kind: 'err', msg: j.error || 'تعذّر إنهاء الجلسات.' });
         return;
       }
-      setPassword('');
-      setConfirm('');
-      setResult({ kind: 'ok', msg: 'Remote password saved. Remote login sessions last 30 days.' });
+      window.location.replace('/login');
     } catch (e) {
       setResult({ kind: 'err', msg: String(e) });
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
-  return (
-    <div className="card p-5 animate-fade-in">
-      <div className="flex items-center gap-2 mb-4">
-        <KeyRound size={16} className="text-accent" />
-        <h2 className="font-semibold">Remote panel password</h2>
-      </div>
-      <p className="text-sm text-slate-400 mb-4">
-        Applies only when the dashboard is opened through a remote domain. Localhost and LAN access stay open.
-      </p>
-      <div className="space-y-3 max-w-xl">
-        <label className="block">
-          <span className="text-xs text-slate-400">New remote password</span>
-          <div className="relative mt-1">
-            <input
-              type={showPwd ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="new-password"
-              className="block w-full bg-bg-elevated border border-bg-border rounded-md px-3 py-2 pr-10 text-sm font-mono focus:outline-none focus:border-accent"
-            />
-            <button type="button" onClick={() => setShowPwd((s) => !s)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-              {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-        </label>
-        <label className="block">
-          <span className="text-xs text-slate-400">Confirm password</span>
-          <input
-            type={showPwd ? 'text' : 'password'}
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            autoComplete="new-password"
-            className="block w-full mt-1 bg-bg-elevated border border-bg-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-          />
-        </label>
+  const currentDomainCount = data?.credentials.filter((c) => c.rpId === data.rpID).length ?? 0;
 
-        {result && (
-          <div className={`text-sm flex items-start gap-2 p-3 rounded ${
-            result.kind === 'ok' ? 'bg-accent-green/10 text-accent-green border border-accent-green/30' : 'bg-accent-red/10 text-accent-red border border-accent-red/30'
-          }`}>
-            {result.kind === 'ok' ? <CheckCircle2 size={16} className="mt-0.5" /> : <AlertCircle size={16} className="mt-0.5" />}
-            <span>{result.msg}</span>
+  return (
+    <div className="card p-5 animate-fade-in space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <Fingerprint size={18} className="text-accent" />
+          <h2 className="font-semibold">حماية الدخول بالبصمة (Biometric Passkeys)</h2>
+        </div>
+        <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-accent-green/15 text-accent-green border border-accent-green/30 font-medium">
+          <ShieldCheck size={13} />
+          FIDO2 WebAuthn
+        </span>
+      </div>
+
+      <p className="text-sm text-slate-400 leading-relaxed">
+        يعتمد الدخول حصرياً على التوقيع البيومتري (Touch ID / Face ID) مع جلسات محفوظة في قاعدة البيانات ودرع CSRF.
+      </p>
+
+      {/* Metrics Strip */}
+      <div className="grid grid-cols-3 gap-2 max-w-3xl">
+        <PushMetric label="البصمات المسجّلة" value={data?.credentials.length ?? 0} tone={(data?.credentials.length ?? 0) > 0 ? 'ok' : 'warn'} />
+        <PushMetric label={`بصمات (${data?.rpID ?? '...'})`} value={currentDomainCount} tone={currentDomainCount > 0 ? 'ok' : undefined} />
+        <PushMetric label="الجلسات النشطة" value={data?.activeSessions ?? 0} tone="ok" />
+      </div>
+
+      {result && (
+        <div
+          className={`text-sm flex items-start gap-2 p-3 rounded max-w-3xl ${
+            result.kind === 'ok'
+              ? 'bg-accent-green/10 text-accent-green border border-accent-green/30'
+              : 'bg-accent-red/10 text-accent-red border border-accent-red/30'
+          }`}
+        >
+          {result.kind === 'ok' ? <CheckCircle2 size={16} className="mt-0.5 shrink-0" /> : <AlertCircle size={16} className="mt-0.5 shrink-0" />}
+          <span>{result.msg}</span>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-bg-border bg-bg-elevated/35 p-4 text-xs text-slate-400 leading-relaxed max-w-3xl">
+        بصمة واحدة مشتركة لكل لوحات <code>tv-eg.com</code> (Apple passkey). تسجيل بصمات جديدة مقفول نهائياً من هنا ومن أي صفحة.
+      </div>
+
+      {/* Registered Passkeys Table */}
+      <div className="space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm font-medium">البصمة المعتمدة (مشتركة · للقراءة فقط)</div>
+          {(data?.activeSessions ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={revokeAllSessions}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1.5 rounded border border-accent-red/35 bg-accent-red/10 px-3 py-1.5 text-xs text-accent-red hover:bg-accent-red/20 disabled:opacity-50"
+            >
+              <LogOut size={13} />
+              إنهاء جميع الجلسات النشطة ({data?.activeSessions})
+            </button>
+          )}
+        </div>
+
+        {data?.credentials.length === 0 && (
+          <div className="rounded-md border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+            ملف البصمة المشتركة غير موجود أو غير مقروء على هذا الجهاز — اللوحة مقفلة (Fail-Closed) لحين إعادته.
           </div>
         )}
 
+        <div className="space-y-2">
+          {data?.credentials.map((cred) => (
+            <div
+              key={cred.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-bg-border bg-bg-elevated/35 p-3 text-xs"
+            >
+              <div className="min-w-0 space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-slate-100 text-sm">{cred.label}</span>
+                  <Badge tone="ok">{cred.rpId}</Badge>
+                  <Badge tone="ok">Passkey متزامن (iCloud)</Badge>
+                </div>
+                <div className="text-slate-400 font-mono text-[11px] break-all">
+                  ID: {cred.idPreview}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Security Audit Log Toggle */}
+      <div className="pt-1 border-t border-bg-border/60">
         <button
-          onClick={save}
-          disabled={!password || !confirm || busy}
-          className="px-4 py-2 rounded bg-accent text-white text-sm font-medium hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2"
+          type="button"
+          onClick={() => setAuditOpen((v) => !v)}
+          className="text-xs text-slate-400 hover:text-slate-200 underline underline-offset-4"
         >
-          {busy ? <Loader size={14} className="animate-spin" /> : <Save size={14} />}
-          Save panel password
+          {auditOpen ? 'إخفاء سجل الحماية الأمني' : `عرض سجل الحماية والأحداث الأمنية (${data?.recentEvents.length ?? 0})`}
         </button>
+
+        {auditOpen && (
+          <div className="mt-3 space-y-1.5 max-h-60 overflow-y-auto rounded-md border border-bg-border bg-bg-elevated/30 p-3 text-xs">
+            {data?.recentEvents.length === 0 && <div className="text-slate-500">لا توجد أحداث مسجّلة بعد.</div>}
+            {data?.recentEvents.map((ev) => (
+              <div key={ev.id} className="grid grid-cols-1 sm:grid-cols-[145px_170px_minmax(0,1fr)] gap-1 sm:gap-3 py-1 border-b border-bg-border/40 last:border-0">
+                <span className="text-slate-500 font-mono text-[11px]">{formatTs(ev.createdAt)}</span>
+                <span
+                  className={`font-mono text-[11px] ${
+                    ev.eventType.includes('ok') || ev.eventType.includes('registered')
+                      ? 'text-accent-green'
+                      : ev.eventType.includes('blocked') || ev.eventType.includes('failed') || ev.eventType.includes('clone')
+                        ? 'text-accent-red'
+                        : 'text-amber-300'
+                  }`}
+                >
+                  {ev.eventType}
+                </span>
+                <span className="text-slate-300 break-all">{ev.detail ?? '-'}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

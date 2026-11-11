@@ -1,10 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isAuthenticatedRequest, isLocalOrLanRequest, isPanelPasswordAvailable, safeNextPath } from './lib/remote-auth';
+import {
+  PANEL_COOKIE,
+  applySecurityHeaders,
+  clearPanelSessionCookie,
+  clientRateLimitScope,
+  extractHostWithoutPort,
+  hasSmuggledInternalHeaders,
+  isAuthenticatedRequest,
+  logSecurityEvent,
+  readRequestCookie,
+  resolveRelyingParty,
+  safeNextPath,
+  secureCookieForRequest,
+  verifySameOriginRequest,
+} from './lib/remote-auth';
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webmanifest|css|js|map)$).*)'],
+  // Never exclude `/api/*` or dynamic routes based on file extensions (prevents `.js`/`.png` suffix bypass).
+  matcher: [
+    '/((?!_next/static|_next/image|favicon\\.ico$|icon\\.png$|apple-icon\\.png$|apple-touch-icon\\.png$|logo-original\\.png$|icon-\\d+\\.png$).*)',
+  ],
   runtime: 'nodejs',
 };
 
@@ -45,42 +62,85 @@ function isConfigured(): boolean {
 }
 
 export function middleware(req: NextRequest) {
-  const pathname = req.nextUrl.pathname;
-  if (isPublicPath(pathname)) return NextResponse.next();
-
-  const configured = isConfigured();
-  const isLocalOrLan = isLocalOrLanRequest(req);
-
-  if (!isLocalOrLan && !isPanelPasswordAvailable()) {
-    if (pathname.startsWith('/api/')) {
-      return NextResponse.json({ ok: false, error: 'panel password must be configured locally' }, { status: 403 });
-    }
-    const url = req.nextUrl.clone();
-    url.pathname = '/login';
-    url.search = '';
-    return NextResponse.redirect(url);
+  if (hasSmuggledInternalHeaders(req)) {
+    logSecurityEvent({
+      eventType: 'bypass_attempt_blocked',
+      ipHash: clientRateLimitScope(req),
+      detail: 'Blocked smuggled internal middleware header',
+    });
+    return applySecurityHeaders(
+      NextResponse.json({ ok: false, error: 'forbidden header' }, { status: 403 }),
+      req,
+    );
   }
 
-  if (!isLocalOrLan && !isAuthenticatedRequest(req)) {
+  const pathname = req.nextUrl.pathname;
+
+  // Canonicalize raw 127.0.0.1 loopback to `localhost` so W3C WebAuthn Touch ID works seamlessly
+  const hostOnly = extractHostWithoutPort(req.headers.get('host'));
+  if (hostOnly === '127.0.0.1' && (req.method === 'GET' || req.method === 'HEAD') && !pathname.startsWith('/api/')) {
+    const portPart = (req.headers.get('host') ?? '').includes(':')
+      ? `:${(req.headers.get('host') ?? '').split(':')[1]}`
+      : '';
+    return applySecurityHeaders(
+      NextResponse.redirect(`http://localhost${portPart}${pathname}${req.nextUrl.search}`),
+      req,
+    );
+  }
+
+  // Enforce Same-Origin CSRF protection on all state-mutating API calls globally
+  if (pathname.startsWith('/api/') && !verifySameOriginRequest(req)) {
+    logSecurityEvent({
+      eventType: 'csrf_blocked',
+      rpId: resolveRelyingParty(req).rpID,
+      ipHash: clientRateLimitScope(req),
+      detail: `Middleware blocked cross-origin ${req.method} ${pathname}`,
+    });
+    return applySecurityHeaders(
+      NextResponse.json({ ok: false, error: 'cross-origin request blocked' }, { status: 403 }),
+      req,
+    );
+  }
+
+  if (isPublicPath(pathname)) {
+    return applySecurityHeaders(NextResponse.next(), req);
+  }
+
+  // Zero-Trust Biometric Gate: EVERY browser & API call (local, LAN, Safari, Chrome, mobile, remote)
+  // MUST present an active biometric session backed by a non-revoked Passkey in SQLite.
+  if (!isAuthenticatedRequest(req)) {
+    const hadStaleCookie = Boolean(readRequestCookie(req, PANEL_COOKIE));
+    const secure = secureCookieForRequest(req);
     if (pathname.startsWith('/api/')) {
-      return NextResponse.json({ ok: false, error: 'login required' }, { status: 401 });
+      const res = NextResponse.json({ ok: false, error: 'biometric passkey login required' }, { status: 401 });
+      if (hadStaleCookie) clearPanelSessionCookie(res, secure);
+      return applySecurityHeaders(res, req);
     }
     const url = req.nextUrl.clone();
     url.pathname = '/login';
     url.search = `?next=${encodeURIComponent(safeNextPath(`${pathname}${req.nextUrl.search}`))}`;
-    return NextResponse.redirect(url);
+    const res = NextResponse.redirect(url);
+    if (hadStaleCookie) clearPanelSessionCookie(res, secure);
+    return applySecurityHeaders(res, req);
   }
 
-  if (configured) return NextResponse.next();
-  if (pathname === '/setup' || pathname === '/api/settings' || pathname === '/api/setup-status') {
-    return NextResponse.next();
+  const configured = isConfigured();
+
+  if (configured) {
+    return applySecurityHeaders(NextResponse.next(), req);
+  }
+  if (pathname === '/setup' || pathname === '/api/settings' || pathname === '/api/setup-status' || pathname === '/api/detect-router') {
+    return applySecurityHeaders(NextResponse.next(), req);
   }
   if (pathname.startsWith('/api/')) {
-    return NextResponse.json({ ok: false, error: 'router setup required' }, { status: 428 });
+    return applySecurityHeaders(
+      NextResponse.json({ ok: false, error: 'router setup required' }, { status: 428 }),
+      req,
+    );
   }
   const url = req.nextUrl.clone();
   url.pathname = '/setup';
-  return NextResponse.redirect(url);
+  return applySecurityHeaders(NextResponse.redirect(url), req);
 }
 
 function isPublicPath(pathname: string): boolean {
@@ -89,11 +149,13 @@ function isPublicPath(pathname: string): boolean {
     pathname === '/sw.js' ||
     pathname === '/manifest.webmanifest' ||
     pathname === '/api/auth/csrf' ||
-    pathname === '/api/auth/login' ||
     pathname === '/api/auth/logout' ||
-    pathname === '/api/push/vapid-key' ||
-    pathname === '/api/push/status' ||
-    pathname === '/api/push/subscribe' ||
-    pathname === '/api/push/unsubscribe'
+    pathname === '/api/auth/passkey/ping' ||
+    pathname === '/api/auth/passkey/status' ||
+    pathname === '/api/auth/passkey/login/options' ||
+    pathname === '/api/auth/passkey/login/verify' ||
+    pathname === '/api/auth/passkey/register/options' ||
+    pathname === '/api/auth/passkey/register/verify' ||
+    pathname === '/api/auth/passkey/enroll-token'
   );
 }

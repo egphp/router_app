@@ -47,7 +47,26 @@ export function upsertEnvValues(values: Record<string, string>): void {
     }
     process.env[key] = value;
   }
-  fs.writeFileSync(envPath, `${lines.join('\n').replace(/\n*$/, '')}\n`, 'utf-8');
+  const tmpPath = `${envPath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmpPath, `${lines.join('\n').replace(/\n*$/, '')}\n`, { encoding: 'utf-8', mode: 0o600 });
+  fs.renameSync(tmpPath, envPath);
+}
+
+export function removeEnvKeys(keys: string[]): void {
+  const envPath = resolveEnvPath();
+  if (!fs.existsSync(envPath)) return;
+  const keySet = new Set(keys);
+  const filtered = readEnvFile()
+    .split('\n')
+    .filter((line) => {
+      const eq = line.indexOf('=');
+      if (eq <= 0) return true;
+      return !keySet.has(line.slice(0, eq).trim());
+    });
+  for (const k of keys) delete process.env[k];
+  const tmpPath = `${envPath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmpPath, `${filtered.join('\n').replace(/\n*$/, '')}\n`, { encoding: 'utf-8', mode: 0o600 });
+  fs.renameSync(tmpPath, envPath);
 }
 
 function sanitizeEnvValue(value: string): string {
