@@ -8,10 +8,14 @@ import {
   getRouterUptimeSeries,
   type TopTalkersRange,
 } from '../../../lib/queries';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
+  const denied = guardApiRequest(req);
+  if (denied) return denied;
+
   const url = new URL(req.url);
   const kind = url.searchParams.get('kind');
   switch (kind) {

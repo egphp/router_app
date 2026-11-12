@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@tenda/shared';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = guardApiRequest(req);
+  if (denied) return denied;
   const db = getDb();
   const rows = db.prepare(
     `SELECT mac, vendor, device_type, os_guess, reverse_dns, last_check FROM device_enrichment ORDER BY last_check DESC LIMIT 500`,

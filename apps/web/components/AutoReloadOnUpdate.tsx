@@ -27,6 +27,7 @@ export function AutoReloadOnUpdate() {
     };
 
     const checkVersion = async () => {
+      if (window.location.pathname === '/login') return;
       try {
         const res = await fetch('/api/version?reload-check=1', { cache: 'no-store' });
         if (!res.ok) return;

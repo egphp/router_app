@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getConsumption, getDailyReport, getAttackLog, getRouterLog, getOutages } from '../../../lib/queries';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,7 +10,11 @@ function toCsv(rows: any[]): string {
   const escape = (v: any) => {
     if (v === null || v === undefined) return '';
     if (typeof v === 'object') v = JSON.stringify(v);
-    const s = String(v);
+    let s = String(v);
+    // Prevent CSV Formula Injection (DDE / Excel / Numbers macro execution)
+    if (/^[=+\-@\t\r]/.test(s) && !/^-[0-9]+(?:\.[0-9]+)?$/.test(s)) {
+      s = `'${s}`;
+    }
     if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
     return s;
   };
@@ -19,11 +24,14 @@ function toCsv(rows: any[]): string {
 }
 
 export async function GET(req: Request) {
+  const denied = guardApiRequest(req);
+  if (denied) return denied;
+
   const url = new URL(req.url);
   const kind = url.searchParams.get('kind');
-  const format = url.searchParams.get('format') ?? 'json';
+  const rawFormat = url.searchParams.get('format') ?? 'json';
+  const format: 'csv' | 'json' = rawFormat === 'csv' ? 'csv' : 'json';
   let payload: any = null;
-  let filename = `${kind}.${format}`;
   switch (kind) {
     case 'consumption':
       payload = getConsumption();
@@ -53,11 +61,13 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'unknown kind' }, { status: 400 });
   }
 
+  const filename = `${kind}.${format}`;
   if (format === 'csv') {
     const csv = Array.isArray(payload) ? toCsv(payload) : '';
     return new Response(csv, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
         'Content-Disposition': `attachment; filename="${filename}"`,
       },
     });
@@ -65,6 +75,7 @@ export async function GET(req: Request) {
   return new Response(JSON.stringify(payload, null, 2), {
     headers: {
       'Content-Type': 'application/json',
+      'X-Content-Type-Options': 'nosniff',
       'Content-Disposition': `attachment; filename="${filename}"`,
     },
   });

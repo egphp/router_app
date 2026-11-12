@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getDb, sendPushToAll } from '@tenda/shared';
+import { guardApiRequest } from '../../../../lib/remote-auth';
 import { ensureWebMigrations } from '../../../../lib/web-migrations';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST() {
+export async function POST(req: Request) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   ensureWebMigrations();
   const result = await sendPushToAll(getDb(), {
     title: 'اختبار تنبيهات Tenda',

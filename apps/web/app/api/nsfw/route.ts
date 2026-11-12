@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@tenda/shared';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   const db = getDb();
   const enabledRow = db.prepare(`SELECT value FROM settings WHERE key = 'nsfw_detection'`).get() as { value: string } | undefined;
   const enabled = enabledRow ? enabledRow.value !== 'off' : true;
@@ -35,6 +38,8 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   const body = await req.json();
   const { enabled } = body as { enabled?: boolean };
   if (typeof enabled !== 'boolean') {

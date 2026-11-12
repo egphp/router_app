@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import fs from 'node:fs';
 import path from 'node:path';
 import { SetupClient } from '../../components/SetupClient';
+import { requireServerBiometricAuth } from '../../lib/server-auth-guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,11 +35,11 @@ function liveConfigured(): boolean {
   }
 }
 
-export default function SetupPage({ searchParams }: { searchParams?: { force?: string } }) {
+export default async function SetupPage({ searchParams }: { searchParams?: Promise<{ force?: string }> }) {
+  await requireServerBiometricAuth('/setup');
+  const sp = searchParams ? await searchParams : undefined;
   const configured = liveConfigured();
-  // If already configured and the user didn't ask explicitly to edit (?force=1),
-  // bounce them to the dashboard. This handles browser cache + stale URLs.
-  if (configured && !searchParams?.force) {
+  if (configured && !sp?.force) {
     redirect('/');
   }
   return <SetupClient alreadyConfigured={configured} />;

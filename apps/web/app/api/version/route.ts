@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,15 +17,18 @@ function resolveRepoRoot(): string {
   return process.cwd();
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = guardApiRequest(req);
+  if (denied) return denied;
+
   const root = resolveRepoRoot();
   const adminMode = fs.existsSync(path.join(root, '.admin'));
   let local = '';
   let remote = '';
   let lastFetch: number | null = null;
   try {
-    local = execSync('git rev-parse --short HEAD', { cwd: root, encoding: 'utf-8', timeout: 2000 }).trim();
-    remote = execSync('git rev-parse --short origin/main', { cwd: root, encoding: 'utf-8', timeout: 2000 }).trim();
+    local = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf-8', timeout: 2000 }).trim();
+    remote = execFileSync('git', ['rev-parse', '--short', 'origin/main'], { cwd: root, encoding: 'utf-8', timeout: 2000 }).trim();
     // last fetch time from .git/FETCH_HEAD mtime
     try {
       const st = fs.statSync(path.join(root, '.git', 'FETCH_HEAD'));

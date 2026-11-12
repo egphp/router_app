@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { deleteDevice, getDevice, getDeviceStats, getDeviceTraffic, getDeviceTrafficForDay, getDeviceSessions, updateDevice, getDeviceAttacks, getDeviceDailyUsage, type Bucket } from '../../../../lib/queries';
+import { guardApiRequest } from '../../../../lib/remote-auth';
 import { getRouterLiveSnapshot, mergeRouterLiveDevice } from '../../../../lib/router-live';
 
 export const dynamic = 'force-dynamic';
@@ -8,8 +9,11 @@ const VALID_RANGES: Bucket[] = ['hour', 'today', 'week', 'month', 'year', 'all']
 const MAC_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){5}$/;
 
 export async function GET(req: Request, ctx: { params: Promise<{ mac: string }> }) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   const { mac } = await ctx.params;
   const macUp = decodeURIComponent(mac).toUpperCase();
+  if (!MAC_RE.test(macUp)) return NextResponse.json({ error: 'invalid mac' }, { status: 400 });
   const url = new URL(req.url);
   const range = (url.searchParams.get('range') ?? 'today') as Bucket;
   if (!VALID_RANGES.includes(range)) return NextResponse.json({ error: 'invalid range' }, { status: 400 });
@@ -56,13 +60,31 @@ function parseLocalDay(day: string | null): number | null {
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ mac: string }> }) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   const { mac } = await ctx.params;
-  const body = await req.json();
-  updateDevice(decodeURIComponent(mac).toUpperCase(), body);
+  const macUp = decodeURIComponent(mac).toUpperCase();
+  if (!MAC_RE.test(macUp)) return NextResponse.json({ error: 'invalid mac' }, { status: 400 });
+  const body = await req.json().catch(() => ({}));
+  const cleanString = (v: unknown, max: number): string | null | undefined => {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    if (typeof v !== 'string') return undefined;
+    const trimmed = v.replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, max);
+    return trimmed.length > 0 ? trimmed : null;
+  };
+  updateDevice(macUp, {
+    custom_label: cleanString(body?.custom_label, 120),
+    category: cleanString(body?.category, 48),
+    notes: cleanString(body?.notes, 1000),
+    is_new: body?.is_new === 0 || body?.is_new === 1 ? body.is_new : undefined,
+  });
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(_req: Request, ctx: { params: Promise<{ mac: string }> }) {
+export async function DELETE(req: Request, ctx: { params: Promise<{ mac: string }> }) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   const { mac } = await ctx.params;
   const macUp = decodeURIComponent(mac).toUpperCase();
   if (!MAC_RE.test(macUp)) return NextResponse.json({ error: 'invalid mac' }, { status: 400 });

@@ -1,8 +1,10 @@
 import { Dashboard } from '../components/Dashboard';
+import { requireServerBiometricAuth } from '../lib/server-auth-guard';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export default function Home() {
+export default async function Home() {
+  await requireServerBiometricAuth('/');
   return <Dashboard />;
 }

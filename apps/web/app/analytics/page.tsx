@@ -3,10 +3,12 @@ import { TopTalkers } from '../../components/TopTalkers';
 import { CategoryBreakdown } from '../../components/CategoryBreakdown';
 import { ConcurrentChart } from '../../components/ConcurrentChart';
 import { AnomaliesCard } from '../../components/AnomaliesCard';
+import { requireServerBiometricAuth } from '../../lib/server-auth-guard';
 
 export const dynamic = 'force-dynamic';
 
-export default function AnalyticsPage() {
+export default async function AnalyticsPage() {
+  await requireServerBiometricAuth('/analytics');
   return (
     <div className="space-y-5">
       <h1 className="text-xl font-semibold">Analytics</h1>

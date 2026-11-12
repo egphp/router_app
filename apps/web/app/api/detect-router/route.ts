@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,22 +11,25 @@ export const dynamic = 'force-dynamic';
  * common defaults if both fail.
  */
 function detectGateway(): string | null {
-  // Linux
+  // Linux (execFileSync without shell prevents any shell metacharacter surface)
   try {
-    const out = execSync('ip -4 route show default', { encoding: 'utf-8', timeout: 1500 });
-    // "default via 192.168.5.1 dev wlan0 proto dhcp ..."
+    const out = execFileSync('ip', ['-4', 'route', 'show', 'default'], { encoding: 'utf-8', timeout: 1500 });
     const m = out.match(/default via (\d+\.\d+\.\d+\.\d+)/);
     if (m) return m[1];
   } catch {}
   // macOS
   try {
-    const out = execSync('route -n get default 2>/dev/null', { encoding: 'utf-8', timeout: 1500 });
+    const out = execFileSync('route', ['-n', 'get', 'default'], {
+      encoding: 'utf-8',
+      timeout: 1500,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
     const m = out.match(/gateway:\s*(\d+\.\d+\.\d+\.\d+)/);
     if (m) return m[1];
   } catch {}
   // BSD / fallback
   try {
-    const out = execSync('netstat -rn -f inet', { encoding: 'utf-8', timeout: 1500 });
+    const out = execFileSync('netstat', ['-rn', '-f', 'inet'], { encoding: 'utf-8', timeout: 1500 });
     const line = out.split('\n').find((l) => l.startsWith('default'));
     if (line) {
       const m = line.match(/default\s+(\d+\.\d+\.\d+\.\d+)/);
@@ -54,7 +58,10 @@ function localSubnetGuess(): { lanIp: string | null; guesses: string[] } {
   return { lanIp, guesses: [...guesses] };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = guardApiRequest(req);
+  if (denied) return denied;
+
   const gateway = detectGateway();
   const { lanIp, guesses } = localSubnetGuess();
   // Prefer the gateway; if missing, prefer the first .1 subnet guess

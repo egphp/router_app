@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getRouterSnapshot } from '../../../lib/queries';
 import { MIN } from '@tenda/shared';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = guardApiRequest(req);
+  if (denied) return denied;
+
   const snap = getRouterSnapshot();
   const connected = !!snap.last_sample_ts && Date.now() - snap.last_sample_ts < 2 * MIN;
   return NextResponse.json({

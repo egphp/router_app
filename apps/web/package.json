@@ -6,19 +6,22 @@
   "scripts": {
     "dev": "next dev -p 3030",
     "build": "next build",
-    "start": "next start -p 3030"
+    "start": "next start -p 3030",
+    "test": "node --import ../../packages/poller/node_modules/tsx/dist/loader.mjs --test test/*.test.ts"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^14.0.0",
+    "@simplewebauthn/server": "^14.1.0",
     "@tenda/shared": "workspace:*",
     "better-sqlite3": "^11.7.0",
     "clsx": "^2.1.1",
-    "next": "^15.1.4",
+    "lucide-react": "^0.471.1",
+    "next": "^15.5.18",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.0",
     "swr": "^2.2.6",
-    "tailwind-merge": "^2.6.0",
-    "lucide-react": "^0.471.1"
+    "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

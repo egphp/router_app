@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getDb, getPushSubscriptionHealth } from '@tenda/shared';
+import { guardApiRequest } from '../../../../lib/remote-auth';
 import { ensureWebMigrations } from '../../../../lib/web-migrations';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   ensureWebMigrations();
   const body = await readJson(req);
   const result = getPushSubscriptionHealth(getDb(), body.endpoint);

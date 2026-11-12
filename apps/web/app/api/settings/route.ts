@@ -1,14 +1,21 @@
 import { NextResponse } from 'next/server';
 import { loadConfig } from '@tenda/shared';
-import { isLocalOrLanRequest, isPanelPasswordConfigured } from '../../../lib/remote-auth';
+import {
+  guardApiRequest,
+  hasAnyActivePasskey,
+  isLocalOrLanRequest,
+  isValidRouterHost,
+} from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
 const CONTROL_BASE = `http://127.0.0.1:${process.env.CONTROL_PORT ?? 3031}`;
 
-export async function GET() {
+export async function GET(req: Request) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
+
   const cfg = loadConfig();
-  // Probe daemon health
   let daemonOk = false;
   let daemonHost = cfg.routerHost;
   try {
@@ -31,21 +38,35 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  if (!isPanelPasswordConfigured() && !isLocalOrLanRequest(req)) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
+
+  if (!hasAnyActivePasskey() && !isLocalOrLanRequest(req)) {
     return NextResponse.json({ ok: false, error: 'initial setup must be done locally' }, { status: 403 });
   }
-  const body = await req.json();
-  const { action, host, password } = body as { action?: string; host?: string; password?: string };
+
+  let body: { action?: unknown; host?: unknown; password?: unknown } = {};
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 });
+  }
+
+  const { action, host, password } = body;
+  if (!isValidRouterHost(host)) {
+    return NextResponse.json({ ok: false, error: 'invalid router LAN IP or hostname' }, { status: 400 });
+  }
+  if (typeof password !== 'string' || !password || password.length > 256) {
+    return NextResponse.json({ ok: false, error: 'host + valid password required' }, { status: 400 });
+  }
+  const cleanHost = host.trim();
 
   if (action === 'test') {
-    if (!host || !password) {
-      return NextResponse.json({ ok: false, error: 'host + password required' }, { status: 400 });
-    }
     try {
       const r = await fetch(`${CONTROL_BASE}/test-credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, password }),
+        body: JSON.stringify({ host: cleanHost, password }),
         signal: AbortSignal.timeout(8000),
       });
       const j = await r.json();
@@ -56,14 +77,11 @@ export async function POST(req: Request) {
   }
 
   if (action === 'save') {
-    if (!host || !password) {
-      return NextResponse.json({ ok: false, error: 'host + password required' }, { status: 400 });
-    }
     try {
       const r = await fetch(`${CONTROL_BASE}/update-credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, password }),
+        body: JSON.stringify({ host: cleanHost, password }),
         signal: AbortSignal.timeout(8000),
       });
       const j = await r.json();

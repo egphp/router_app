@@ -493,7 +493,17 @@ export function deleteDevice(mac: string): DeleteDeviceResult {
   })();
 }
 
+const SAFE_SQL_IDENT_RE = /^[a-z_][a-z0-9_]*$/;
+
+function assertSafeSqlIdent(ident: string): void {
+  if (!SAFE_SQL_IDENT_RE.test(ident)) {
+    throw new Error(`Unsafe SQL identifier blocked: ${ident}`);
+  }
+}
+
 function deleteWhereIfColumnExists(conn: ReturnType<typeof db>, table: string, column: string, value: string): number {
+  assertSafeSqlIdent(table);
+  assertSafeSqlIdent(column);
   const tableRow = conn.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) as { name: string } | undefined;
   if (!tableRow) return 0;
   const columns = conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -502,6 +512,8 @@ function deleteWhereIfColumnExists(conn: ReturnType<typeof db>, table: string, c
 }
 
 function deleteWhereTextContainsIfColumnExists(conn: ReturnType<typeof db>, table: string, column: string, value: string): number {
+  assertSafeSqlIdent(table);
+  assertSafeSqlIdent(column);
   const tableRow = conn.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) as { name: string } | undefined;
   if (!tableRow) return 0;
   const columns = conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;

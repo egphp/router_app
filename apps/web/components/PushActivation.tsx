@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { AlertCircle, Bell, CheckCircle2, Share, X } from 'lucide-react';
 
 type BannerMode = 'install' | 'enable';
@@ -18,11 +19,14 @@ const VAPID_KEY_STORAGE = 'tenda_push_vapid_key';
 const PUSH_REFRESH_WINDOW_MS = 30 * 24 * 3600 * 1000;
 
 export function PushActivation() {
+  const pathname = usePathname();
+  const isAuthPage = pathname === '/login' || pathname === '/setup';
   const [mode, setMode] = useState<BannerMode | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   useEffect(() => {
+    if (isAuthPage) return;
     let cancelled = false;
 
     const init = async () => {
@@ -74,7 +78,7 @@ export function PushActivation() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthPage]);
 
   useEffect(() => {
     if (!notice?.autoDismissMs) return;
@@ -117,7 +121,7 @@ export function PushActivation() {
     }
   };
 
-  if (!mode && !notice) return null;
+  if (isAuthPage || (!mode && !notice)) return null;
 
   return (
     <div className="fixed inset-x-3 bottom-3 z-50 sm:left-auto sm:right-5 sm:w-[420px]">

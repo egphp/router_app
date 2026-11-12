@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
+import { guardApiRequest } from '../../../lib/remote-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,10 @@ function resolveRepoRoot(): string {
   return process.cwd();
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = guardApiRequest(req);
+  if (denied) return denied;
+
   const envPath = path.join(resolveRepoRoot(), '.env');
   let configured = false;
   try {

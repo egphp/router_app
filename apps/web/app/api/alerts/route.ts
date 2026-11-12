@@ -1,16 +1,21 @@
 import { NextResponse } from 'next/server';
 import { getDb, suppressAlertFuture } from '@tenda/shared';
 import { getAlerts, dismissAlert, dismissAllAlerts, markAllDevicesKnown, dismissAlertsByKind } from '../../../lib/queries';
+import { guardApiRequest } from '../../../lib/remote-auth';
 import { ensureWebMigrations } from '../../../lib/web-migrations';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   ensureWebMigrations();
   return NextResponse.json({ alerts: getAlerts(200) });
 }
 
 export async function PATCH(req: Request) {
+  const blocked = guardApiRequest(req);
+  if (blocked) return blocked;
   ensureWebMigrations();
   const body = await req.json();
   if (body?.action === 'ignore_future' && typeof body?.id === 'number') {
