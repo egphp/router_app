@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import {
-  PANEL_CSRF_COOKIE,
   hasAnyActivePasskey,
   makeCsrfToken,
+  panelCsrfCookieName,
   resolveRelyingParty,
   secureCookieForRequest,
 } from '../../../../lib/remote-auth';
@@ -16,10 +16,10 @@ export async function GET(req: Request) {
     ok: true,
     passwordlessOnly: true,
     token,
-    configured: hasAnyActivePasskey(rp.rpID),
+    configured: hasAnyActivePasskey(rp.rpID, req),
     defaultActive: false,
   });
-  res.cookies.set(PANEL_CSRF_COOKIE, token, {
+  res.cookies.set(panelCsrfCookieName(req), token, {
     httpOnly: true,
     secure: secureCookieForRequest(req),
     sameSite: 'lax',

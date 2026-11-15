@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
+import { browserSupportsWebAuthn, startRegistration, WebAuthnError } from '@simplewebauthn/browser';
 import { fetcher } from '../lib/fetcher';
 import {
   Eye,
@@ -16,7 +17,10 @@ import {
   Gauge,
   Trash2,
   Fingerprint,
+  Copy,
+  Check,
   ShieldCheck,
+  Link2,
   LogOut,
 } from 'lucide-react';
 
@@ -242,6 +246,7 @@ interface SecurityEventItem {
 
 interface PasskeyManagementResponse {
   ok: boolean;
+  mode?: 'shared' | 'local_vault';
   rpID: string;
   origin: string;
   isSecureOrigin: boolean;
@@ -257,9 +262,113 @@ function RemotePanelAccessCard() {
   const { data, mutate } = useSWR<PasskeyManagementResponse>('/api/auth/passkey/credentials', fetcher, {
     refreshInterval: 15000,
   });
+  const [deviceLabel, setDeviceLabel] = useState('');
+  const [pairLabelHint, setPairLabelHint] = useState('');
+  const [issuedPair, setIssuedPair] = useState<{ token: string; expiresAt: number } | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
   const [result, setResult] = useState<null | { kind: 'ok' | 'err'; msg: string }>(null);
+
+  const isLocalVault = data?.mode === 'local_vault';
+
+  const registerLocalPasskey = async () => {
+    setResult(null);
+    if (!browserSupportsWebAuthn()) {
+      setResult({ kind: 'err', msg: 'هذا المتصفح لا يدعم WebAuthn Passkeys.' });
+      return;
+    }
+    setBusy('register');
+    try {
+      const optRes = await fetch('/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: deviceLabel.trim() || undefined }),
+      });
+      const optJson = await optRes.json();
+      if (!optRes.ok || !optJson.ok) {
+        setResult({ kind: 'err', msg: optJson.error || 'تعذّر بدء تسجيل البصمة.' });
+        return;
+      }
+
+      const attestation = await startRegistration({ optionsJSON: optJson.options });
+
+      const verRes = await fetch('/api/auth/passkey/register/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response: attestation,
+          label: deviceLabel.trim() || undefined,
+        }),
+      });
+      const verJson = await verRes.json();
+      if (!verRes.ok || !verJson.ok) {
+        setResult({ kind: 'err', msg: verJson.error || 'فشل التحقق من تسجيل البصمة.' });
+        return;
+      }
+      setDeviceLabel('');
+      setResult({
+        kind: 'ok',
+        msg: `تم تسجيل بصمة الجهاز (${verJson.label}) بنجاح.`,
+      });
+      mutate();
+    } catch (e) {
+      if (e instanceof WebAuthnError && e.code === 'ERROR_CEREMONY_ABORTED') {
+        setResult({ kind: 'err', msg: 'تم إلغاء نافذة البصمة.' });
+      } else {
+        setResult({ kind: 'err', msg: e instanceof Error ? e.message : String(e) });
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const generatePairingToken = async () => {
+    setResult(null);
+    setBusy('pair');
+    try {
+      const r = await fetch('/api/auth/passkey/enroll-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ labelHint: pairLabelHint.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setResult({ kind: 'err', msg: j.error || 'تعذّر إصدار رابط التفعيل.' });
+        return;
+      }
+      setIssuedPair({ token: j.token, expiresAt: j.expiresAt });
+      setPairLabelHint('');
+      mutate();
+    } catch (e) {
+      setResult({ kind: 'err', msg: String(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revokePasskey = async (id: string) => {
+    setBusy(`rev-${id}`);
+    setResult(null);
+    try {
+      const r = await fetch('/api/auth/passkey/credentials', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setResult({ kind: 'err', msg: j.error || 'تعذّر إلغاء البصمة.' });
+        return;
+      }
+      setResult({ kind: 'ok', msg: 'تم إلغاء البصمة والجلسات المرتبطة بها.' });
+      mutate();
+    } catch (e) {
+      setResult({ kind: 'err', msg: String(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const revokeAllSessions = async () => {
     setBusy('revoke-sessions');
@@ -284,6 +393,10 @@ function RemotePanelAccessCard() {
   };
 
   const currentDomainCount = data?.credentials.filter((c) => c.rpId === data.rpID).length ?? 0;
+  const fullPairLink =
+    issuedPair && typeof window !== 'undefined'
+      ? `${window.location.origin}/login?enroll=${encodeURIComponent(issuedPair.token)}`
+      : null;
 
   return (
     <div className="card p-5 animate-fade-in space-y-5">
@@ -322,14 +435,82 @@ function RemotePanelAccessCard() {
         </div>
       )}
 
-      <div className="rounded-lg border border-bg-border bg-bg-elevated/35 p-4 text-xs text-slate-400 leading-relaxed max-w-3xl">
-        بصمة واحدة مشتركة لكل لوحات <code>tv-eg.com</code> (Apple passkey). تسجيل بصمات جديدة مقفول نهائياً من هنا ومن أي صفحة.
-      </div>
+      {!isLocalVault ? (
+        <div className="rounded-lg border border-bg-border bg-bg-elevated/35 p-4 text-xs text-slate-400 leading-relaxed max-w-3xl">
+          بصمة واحدة مشتركة لكل لوحات <code>tv-eg.com</code> (Apple passkey). تسجيل بصمات جديدة مقفول نهائياً من هنا ومن أي صفحة.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl">
+          <div className="rounded-lg border border-bg-border bg-bg-elevated/35 p-3.5 space-y-2.5">
+            <div className="text-xs font-semibold text-slate-200">إضافة بصمة هذا الجهاز مباشرة</div>
+            <input
+              type="text"
+              value={deviceLabel}
+              onChange={(e) => setDeviceLabel(e.target.value)}
+              placeholder="اسم الجهاز (اختياري)"
+              maxLength={64}
+              className="w-full bg-bg-card border border-bg-border rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-accent"
+            />
+            <button
+              type="button"
+              onClick={registerLocalPasskey}
+              disabled={busy !== null}
+              className="btn-primary w-full py-2 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              {busy === 'register' ? <Loader size={13} className="animate-spin" /> : <Fingerprint size={14} />}
+              تسجيل بصمة إضافية
+            </button>
+          </div>
+
+          <div className="rounded-lg border border-bg-border bg-bg-elevated/35 p-3.5 space-y-2.5">
+            <div className="text-xs font-semibold text-slate-200">رابط تفعيل جهاز آخر (صالح 5 دقائق لمرة واحدة)</div>
+            <input
+              type="text"
+              value={pairLabelHint}
+              onChange={(e) => setPairLabelHint(e.target.value)}
+              placeholder="اسم الجهاز الجديد (اختياري)"
+              maxLength={64}
+              className="w-full bg-bg-card border border-bg-border rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-accent"
+            />
+            <button
+              type="button"
+              onClick={generatePairingToken}
+              disabled={busy !== null}
+              className="w-full py-2 rounded bg-bg-card border border-bg-border text-xs text-slate-200 hover:bg-bg-border flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              {busy === 'pair' ? <Loader size={13} className="animate-spin" /> : <Link2 size={14} />}
+              إصدار رابط تفعيل لمرة واحدة
+            </button>
+            {fullPairLink && (
+              <div className="flex items-center gap-2 pt-1">
+                <code className="flex-1 truncate rounded bg-bg-card px-2 py-1 font-mono text-[11px] text-slate-300 border border-bg-border" dir="ltr">
+                  {fullPairLink}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(fullPairLink).then(() => {
+                      setCopiedLink(true);
+                      setTimeout(() => setCopiedLink(false), 2000);
+                    }).catch(() => {});
+                  }}
+                  className="px-2.5 py-1 rounded bg-accent text-white text-xs inline-flex items-center gap-1 shrink-0"
+                >
+                  {copiedLink ? <Check size={12} /> : <Copy size={12} />}
+                  نسخ
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Registered Passkeys Table */}
       <div className="space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm font-medium">البصمة المعتمدة (مشتركة · للقراءة فقط)</div>
+          <div className="text-sm font-medium">
+            {isLocalVault ? 'البصمات المعتمدة حالياً' : 'البصمة المعتمدة (مشتركة · للقراءة فقط)'}
+          </div>
           {(data?.activeSessions ?? 0) > 0 && (
             <button
               type="button"
@@ -345,7 +526,9 @@ function RemotePanelAccessCard() {
 
         {data?.credentials.length === 0 && (
           <div className="rounded-md border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-            ملف البصمة المشتركة غير موجود أو غير مقروء على هذا الجهاز — اللوحة مقفلة (Fail-Closed) لحين إعادته.
+            {isLocalVault
+              ? 'لا توجد أي بصمة مسجّلة حتى الآن — افتح صفحة الدخول لتسجيل البصمة الأولى.'
+              : 'ملف البصمة المشتركة غير موجود أو غير مقروء على هذا الجهاز — اللوحة مقفلة (Fail-Closed) لحين إعادته.'}
           </div>
         )}
 
@@ -359,12 +542,27 @@ function RemotePanelAccessCard() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-semibold text-slate-100 text-sm">{cred.label}</span>
                   <Badge tone="ok">{cred.rpId}</Badge>
-                  <Badge tone="ok">Passkey متزامن (iCloud)</Badge>
+                  <Badge tone={cred.backedUp ? 'ok' : 'warn'}>
+                    {cred.backedUp ? 'Passkey متزامن' : 'مربوط بشريحة الجهاز'}
+                  </Badge>
                 </div>
                 <div className="text-slate-400 font-mono text-[11px] break-all">
                   ID: {cred.idPreview}
+                  {cred.createdAt > 0 ? ` · أُنشئ: ${formatTs(cred.createdAt)}` : ''}
+                  {cred.lastUsedAt ? ` · آخر استخدام: ${formatTs(cred.lastUsedAt)}` : ''}
                 </div>
               </div>
+              {isLocalVault && (data?.credentials.length ?? 0) > 1 && (
+                <button
+                  type="button"
+                  onClick={() => revokePasskey(cred.id)}
+                  disabled={busy !== null}
+                  className="inline-flex items-center gap-1 rounded border border-accent-red/30 bg-accent-red/10 px-2.5 py-1.5 text-accent-red hover:bg-accent-red/20 disabled:opacity-50"
+                >
+                  <Trash2 size={13} />
+                  إلغاء البصمة
+                </button>
+              )}
             </div>
           ))}
         </div>

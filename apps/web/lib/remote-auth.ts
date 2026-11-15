@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@tenda/shared';
 import { readEnvValue, removeEnvKeys, upsertEnvValues } from './env-file';
 import { ensureWebMigrations } from './web-migrations';
-import { SHARED_RP_ID, readSharedPasskey } from './shared-passkey';
+import { SHARED_RP_ID, isSharedPasskeyInstance, readSharedPasskey } from './shared-passkey';
 
 export const PANEL_SESSION_SECRET_ENV = 'TENDA_PANEL_SESSION_SECRET';
 export const LEGACY_PASSWORD_HASH_ENV = 'TENDA_PANEL_PASSWORD_HASH';
@@ -267,10 +267,10 @@ export function resolveRelyingParty(req: Request | NextRequest): RelyingPartyCon
         ? hostWithPort.slice(0, -3)
         : hostWithPort;
 
-  // When nginx uses `proxy_set_header Host $host;` on a custom TLS port (e.g. :209X),
-  // `Host` omits the port while the browser sends `Origin: https://<rpID>:<port>`.
+  // When nginx uses `proxy_set_header Host $host;` on a custom TLS port (e.g. :209X / :8446),
+  // `Host` omits the port while the browser sends `Origin: https://<rpID>:<port>` (or `Referer`).
   if (proto === 'https' && normalizedHostWithPort === hostName && hostName !== 'localhost' && !net.isIP(hostName)) {
-    const rawOrigin = req.headers.get('origin');
+    const rawOrigin = req.headers.get('origin') || req.headers.get('referer');
     if (rawOrigin && rawOrigin !== 'null') {
       try {
         const parsedOrigin = new URL(rawOrigin);
@@ -278,21 +278,32 @@ export function resolveRelyingParty(req: Request | NextRequest): RelyingPartyCon
           normalizedHostWithPort = parsedOrigin.host.toLowerCase();
         }
       } catch {
-        // ignore malformed origin
+        // ignore malformed origin/referer
       }
     }
   }
 
   const origin = `${proto}://${normalizedHostWithPort}`;
-  // The WebAuthn rpId is the constant `tv-eg.com` whatever the Host header says
-  // (it ignores the port). Only a page served from that exact host (https, any port)
-  // can complete the shared-passkey ceremony.
-  const onSharedHost = hostName === SHARED_RP_ID;
-  const isWebAuthnDomain = onSharedHost;
-  const isSecureOrigin = onSharedHost && proto === 'https';
+  if (isSharedPasskeyInstance(req)) {
+    // Shared owner passkey mode: WebAuthn rpId is the constant `tv-eg.com`.
+    const onSharedHost = hostName === SHARED_RP_ID;
+    return {
+      rpID: SHARED_RP_ID,
+      origin,
+      hostWithPort: normalizedHostWithPort,
+      proto,
+      isSecureOrigin: onSharedHost && proto === 'https',
+      isWebAuthnDomain: onSharedHost,
+    };
+  }
+
+  // Standalone local-vault mode (e.g. PPETO on https://tv-eg.com:8446 or localhost):
+  const rpID = hostName;
+  const isWebAuthnDomain = rpID === 'localhost' || (!net.isIP(rpID) && VALID_DNS_NAME_RE.test(rpID));
+  const isSecureOrigin = (proto === 'https' && isWebAuthnDomain) || rpID === 'localhost';
 
   return {
-    rpID: SHARED_RP_ID,
+    rpID,
     origin,
     hostWithPort: normalizedHostWithPort,
     proto,
@@ -432,13 +443,63 @@ export function readRequestCookie(req: Request | NextRequest, name: string): str
   return undefined;
 }
 
-/** Shared owner passkeys: how many keys the file stores (0 when unreadable). The old vault rows are not consulted. */
-export function hasAnyActivePasskey(_rpId?: string): boolean {
-  return readSharedPasskey() !== null;
+/**
+ * Instance-scoped cookie suffix for standalone local-vault instances so multiple panels on
+ * different ports of the same domain (e.g. tv-eg.com:2055 vs tv-eg.com:8446) NEVER overwrite
+ * or clear each other's session, CSRF, or WebAuthn challenge cookies.
+ */
+function instanceCookieSuffix(): string {
+  return sha256Hex(`tenda-cookie-ns:${ensureSessionSecret()}`).slice(0, 8);
 }
 
-export function countActivePasskeys(_rpId?: string): number {
-  return readSharedPasskey()?.keys.length ?? 0;
+export function panelSessionCookieName(req?: Request | NextRequest | null): string {
+  return isSharedPasskeyInstance(req) ? PANEL_COOKIE : `${PANEL_COOKIE}_${instanceCookieSuffix()}`;
+}
+
+export function panelCsrfCookieName(req?: Request | NextRequest | null): string {
+  return isSharedPasskeyInstance(req) ? PANEL_CSRF_COOKIE : `${PANEL_CSRF_COOKIE}_${instanceCookieSuffix()}`;
+}
+
+export function panelChallengeCookieName(req?: Request | NextRequest | null): string {
+  return isSharedPasskeyInstance(req)
+    ? PANEL_WEBAUTHN_CHALLENGE_COOKIE
+    : `${PANEL_WEBAUTHN_CHALLENGE_COOKIE}_${instanceCookieSuffix()}`;
+}
+
+export function hasAnyActivePasskey(rpId?: string, req?: Request | NextRequest | null): boolean {
+  if (isSharedPasskeyInstance(req)) {
+    return readSharedPasskey() !== null;
+  }
+  ensureWebMigrations();
+  const db = getDb();
+  if (rpId) {
+    const row = db
+      .prepare(`SELECT 1 AS ok FROM passkey_credentials WHERE rp_id = ? AND revoked_at IS NULL LIMIT 1`)
+      .get(rpId) as { ok: number } | undefined;
+    return Boolean(row);
+  }
+  const row = db
+    .prepare(`SELECT 1 AS ok FROM passkey_credentials WHERE revoked_at IS NULL LIMIT 1`)
+    .get() as { ok: number } | undefined;
+  return Boolean(row);
+}
+
+export function countActivePasskeys(rpId?: string, req?: Request | NextRequest | null): number {
+  if (isSharedPasskeyInstance(req)) {
+    return readSharedPasskey()?.keys.length ?? 0;
+  }
+  ensureWebMigrations();
+  const db = getDb();
+  if (rpId) {
+    const row = db
+      .prepare(`SELECT COUNT(*) AS n FROM passkey_credentials WHERE rp_id = ? AND revoked_at IS NULL`)
+      .get(rpId) as { n: number };
+    return Number(row?.n ?? 0);
+  }
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM passkey_credentials WHERE revoked_at IS NULL`)
+    .get() as { n: number };
+  return Number(row?.n ?? 0);
 }
 
 export function createPanelSessionCookie(opts: {
@@ -454,19 +515,25 @@ export function createPanelSessionCookie(opts: {
   const sessionIdHash = sha256Hex(rawToken);
   const ipHash = clientRateLimitScope(opts.req);
 
-  // The shared owner passkey is not a row of `passkey_credentials` (that vault is no
-  // longer consulted), yet `panel_sessions.credential_id` references it. The insert is
-  // synchronous and outside any transaction, so foreign_keys can be switched off for
-  // exactly this statement and restored at once.
-  db.pragma('foreign_keys = OFF');
-  try {
+  if (isSharedPasskeyInstance(opts.req)) {
+    // The shared owner passkey is not a row of `passkey_credentials`, yet `panel_sessions.credential_id`
+    // references it. Toggle foreign_keys off for this single synchronous insert and restore at once.
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.prepare(
+        `INSERT INTO panel_sessions (
+          session_id_hash, credential_id, rp_id, ua_hash, ip_hash, created_at, last_seen_at, expires_at, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      ).run(sessionIdHash, opts.credentialId, opts.rpId, '', ipHash, now, now, expiresAt);
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+  } else {
     db.prepare(
       `INSERT INTO panel_sessions (
         session_id_hash, credential_id, rp_id, ua_hash, ip_hash, created_at, last_seen_at, expires_at, revoked_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
     ).run(sessionIdHash, opts.credentialId, opts.rpId, '', ipHash, now, now, expiresAt);
-  } finally {
-    db.pragma('foreign_keys = ON');
   }
 
   const body = `v2.${rawToken}.${expiresAt}`;
@@ -486,7 +553,7 @@ export function verifyAuthenticatedSession(
   req: Request | NextRequest,
   opts: { slide?: boolean } = {},
 ): VerifiedPanelSession | null {
-  const cookieValue = readRequestCookie(req, PANEL_COOKIE);
+  const cookieValue = readRequestCookie(req, panelSessionCookieName(req));
   if (!cookieValue) return null;
 
   const parts = cookieValue.split('.');
@@ -505,32 +572,45 @@ export function verifyAuthenticatedSession(
     return null;
   }
 
-  // A session counts only while the shared owner passkey file is readable and the
-  // session's credential id is any key in the stored set.
-  const shared = readSharedPasskey();
-  if (!shared) return null;
-
   ensureWebMigrations();
   const db = getDb();
   const sessionIdHash = sha256Hex(rawToken);
-  const row = db
-    .prepare(
-      `SELECT s.session_id_hash, s.credential_id, s.rp_id, s.last_seen_at, s.expires_at
-       FROM panel_sessions s
-       WHERE s.session_id_hash = ?
-         AND s.revoked_at IS NULL
-         AND s.expires_at > ?
-         AND s.credential_id IN (${shared.keys.map(() => '?').join(',')})`,
-    )
-    .get(sessionIdHash, now, ...shared.keys.map((k) => k.id)) as
-    | {
-        session_id_hash: string;
-        credential_id: string;
-        rp_id: string;
-        last_seen_at: number;
-        expires_at: number;
-      }
-    | undefined;
+
+  type SessionRow = {
+    session_id_hash: string;
+    credential_id: string;
+    rp_id: string;
+    last_seen_at: number;
+    expires_at: number;
+  };
+
+  let row: SessionRow | undefined;
+  if (isSharedPasskeyInstance(req)) {
+    const shared = readSharedPasskey();
+    if (!shared) return null;
+    row = db
+      .prepare(
+        `SELECT s.session_id_hash, s.credential_id, s.rp_id, s.last_seen_at, s.expires_at
+         FROM panel_sessions s
+         WHERE s.session_id_hash = ?
+           AND s.revoked_at IS NULL
+           AND s.expires_at > ?
+           AND s.credential_id IN (${shared.keys.map(() => '?').join(',')})`,
+      )
+      .get(sessionIdHash, now, ...shared.keys.map((k) => k.id)) as SessionRow | undefined;
+  } else {
+    row = db
+      .prepare(
+        `SELECT s.session_id_hash, s.credential_id, s.rp_id, s.last_seen_at, s.expires_at
+         FROM panel_sessions s
+         JOIN passkey_credentials c ON c.id = s.credential_id
+         WHERE s.session_id_hash = ?
+           AND s.revoked_at IS NULL
+           AND s.expires_at > ?
+           AND c.revoked_at IS NULL`,
+      )
+      .get(sessionIdHash, now) as SessionRow | undefined;
+  }
 
   if (!row) return null;
 
@@ -589,7 +669,7 @@ export function isAuthenticatedRequest(req: Request | NextRequest): boolean {
 }
 
 export function revokePanelSessionByRequest(req: Request | NextRequest): boolean {
-  const cookieValue = readRequestCookie(req, PANEL_COOKIE);
+  const cookieValue = readRequestCookie(req, panelSessionCookieName(req));
   if (!cookieValue) return false;
   const parts = cookieValue.split('.');
   if (parts.length !== 4 || parts[0] !== 'v2' || !parts[1]) return false;
@@ -665,8 +745,8 @@ export function guardApiRequest(
 
   if (!isAuthenticatedRequest(req)) {
     const res = NextResponse.json({ ok: false, error: 'biometric passkey login required' }, { status: 401 });
-    if (readRequestCookie(req, PANEL_COOKIE)) {
-      clearPanelSessionCookie(res, secureCookieForRequest(req));
+    if (readRequestCookie(req, panelSessionCookieName(req))) {
+      clearPanelSessionCookie(res, secureCookieForRequest(req), req);
     }
     return res;
   }
@@ -694,8 +774,13 @@ export function secureCookieForRequest(req: Request | NextRequest): boolean {
   return !isLocalOrLanRequest(req);
 }
 
-export function setPanelSessionCookie(res: NextResponse, value: string, secure: boolean): void {
-  res.cookies.set(PANEL_COOKIE, value, {
+export function setPanelSessionCookie(
+  res: NextResponse,
+  value: string,
+  secure: boolean,
+  req?: Request | NextRequest | null,
+): void {
+  res.cookies.set(panelSessionCookieName(req), value, {
     httpOnly: true,
     secure,
     sameSite: 'lax',
@@ -704,8 +789,12 @@ export function setPanelSessionCookie(res: NextResponse, value: string, secure: 
   });
 }
 
-export function clearPanelSessionCookie(res: NextResponse, secure: boolean): void {
-  res.cookies.set(PANEL_COOKIE, '', {
+export function clearPanelSessionCookie(
+  res: NextResponse,
+  secure: boolean,
+  req?: Request | NextRequest | null,
+): void {
+  res.cookies.set(panelSessionCookieName(req), '', {
     httpOnly: true,
     secure,
     sameSite: 'lax',

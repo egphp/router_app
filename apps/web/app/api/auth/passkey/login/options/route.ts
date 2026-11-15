@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import {
-  PANEL_CSRF_COOKIE,
   clientRateLimitScope,
   guardApiRequest,
   logSecurityEvent,
+  panelCsrfCookieName,
   readRequestCookie,
   resolveRelyingParty,
   verifyCsrfToken,
@@ -33,7 +33,7 @@ export async function POST(req: Request) {
   }
 
   const body = await readJson(req);
-  if (!verifyCsrfToken(readRequestCookie(req, PANEL_CSRF_COOKIE), body.csrf)) {
+  if (!verifyCsrfToken(readRequestCookie(req, panelCsrfCookieName(req)), body.csrf)) {
     return NextResponse.json({ ok: false, error: 'Invalid or expired security token. Reload page.' }, { status: 400 });
   }
 

@@ -65,10 +65,57 @@ export function enrolClosedResponse(): NextResponse {
 }
 
 export function sharedPasskeyPath(): string {
+  const home = process.env.HOME || os.homedir();
   return (
     process.env.TENDA_SHARED_PASSKEY_FILE ||
-    path.join(os.homedir(), '.config', 'egphp-owner', 'owner-passkey-tv-eg.json')
+    path.join(home, '.config', 'egphp-owner', 'owner-passkey-tv-eg.json')
   );
+}
+
+/**
+ * Determines whether this Tenda Monitor instance uses the owner's shared passkey file
+ * (`https://tv-eg.com:2055` on the owner Mac) vs its own standalone SQLite passkey vault
+ * (e.g. PPETO on `https://tv-eg.com:8446` or any standalone installation).
+ */
+export function isSharedPasskeyInstance(req?: { headers: Headers; url?: string } | null): boolean {
+  const explicitMode = (process.env.TENDA_PASSKEY_MODE ?? '').trim().toLowerCase();
+  if (explicitMode === 'local_vault') return false;
+  if (explicitMode === 'shared') return true;
+
+  if ((process.env.TENDA_SHARED_PASSKEY_FILE ?? '').trim().length > 0) {
+    return true;
+  }
+
+  try {
+    if (fs.existsSync(sharedPasskeyPath())) {
+      return true;
+    }
+  } catch {
+    // ignore filesystem check error
+  }
+
+  if (req) {
+    const originHeader = req.headers.get('origin')?.trim().toLowerCase() ?? '';
+    if (originHeader === EXPECTED_ORIGIN) return true;
+
+    const refererHeader = req.headers.get('referer')?.trim().toLowerCase() ?? '';
+    if (refererHeader === EXPECTED_ORIGIN || refererHeader.startsWith(`${EXPECTED_ORIGIN}/`)) {
+      return true;
+    }
+
+    const xfh = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim().toLowerCase() ?? '';
+    const host = req.headers.get('host')?.split(',')[0]?.trim().toLowerCase() ?? '';
+    if (xfh === 'tv-eg.com:2055' || host === 'tv-eg.com:2055') return true;
+
+    if (typeof req.url === 'string') {
+      const lowerUrl = req.url.toLowerCase();
+      if (lowerUrl === EXPECTED_ORIGIN || lowerUrl.startsWith(`${EXPECTED_ORIGIN}/`)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function coseFromXY(x: Buffer, y: Buffer): Uint8Array<ArrayBuffer> {

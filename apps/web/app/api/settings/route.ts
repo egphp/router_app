@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   const blocked = guardApiRequest(req);
   if (blocked) return blocked;
 
-  if (!hasAnyActivePasskey() && !isLocalOrLanRequest(req)) {
+  if (!hasAnyActivePasskey(undefined, req) && !isLocalOrLanRequest(req)) {
     return NextResponse.json({ ok: false, error: 'initial setup must be done locally' }, { status: 403 });
   }
 

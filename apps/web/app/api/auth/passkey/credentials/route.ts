@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   clientRateLimitScope,
+  countActivePasskeys,
   guardApiRequest,
   isAuthenticatedRequest,
   isLocalOrLanRequest,
@@ -9,8 +10,9 @@ import {
 import {
   listPasskeyCredentials,
   revokeAllActiveSessions,
+  revokePasskeyCredential,
 } from '../../../../../lib/passkey-auth';
-import { enrolClosedResponse } from '../../../../../lib/shared-passkey';
+import { enrolClosedResponse, isSharedPasskeyInstance } from '../../../../../lib/shared-passkey';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +21,7 @@ export async function GET(req: Request) {
   if (blocked) return blocked;
 
   const rp = resolveRelyingParty(req);
-  const summary = listPasskeyCredentials();
+  const summary = listPasskeyCredentials(req);
   return NextResponse.json({
     ok: true,
     rpID: rp.rpID,
@@ -44,8 +46,28 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ ok: true, revoked });
   }
 
-  // Revoking a single passkey is gone with enrolment: the one shared key is not managed here.
-  return enrolClosedResponse();
+  if (isSharedPasskeyInstance(req)) {
+    return enrolClosedResponse();
+  }
+
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  if (!id || id.length > 512) {
+    return NextResponse.json({ ok: false, error: 'Missing passkey credential ID.' }, { status: 400 });
+  }
+
+  if (countActivePasskeys(undefined, req) <= 1 && !body.allowLockoutReset) {
+    return NextResponse.json(
+      { ok: false, error: 'لا يمكن إلغاء آخر بصمة مسجّلة حتى تضيف بصمة جهاز بديل أولاً.' },
+      { status: 400 },
+    );
+  }
+
+  const ok = revokePasskeyCredential(id, ipScope);
+  if (!ok) {
+    return NextResponse.json({ ok: false, error: 'Passkey not found or already revoked.' }, { status: 404 });
+  }
+
+  return NextResponse.json({ ok: true, revokedId: id });
 }
 
 async function readJson(req: Request): Promise<Record<string, unknown>> {

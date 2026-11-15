@@ -14,6 +14,6 @@ export async function POST(req: Request) {
 
   revokePanelSessionByRequest(req);
   const res = NextResponse.json({ ok: true });
-  clearPanelSessionCookie(res, secureCookieForRequest(req));
+  clearPanelSessionCookie(res, secureCookieForRequest(req), req);
   return res;
 }

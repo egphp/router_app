@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  PANEL_COOKIE,
   applySecurityHeaders,
   clearPanelSessionCookie,
   clientRateLimitScope,
   extractHostWithoutPort,
   hasSmuggledInternalHeaders,
   logSecurityEvent,
+  panelSessionCookieName,
   readRequestCookie,
   resolveRelyingParty,
   safeNextPath,
@@ -111,25 +111,25 @@ export function middleware(req: NextRequest) {
   // MUST present an active biometric session backed by a non-revoked Passkey in SQLite.
   const verified = verifyAuthenticatedSession(req, { slide: true });
   if (!verified) {
-    const hadStaleCookie = Boolean(readRequestCookie(req, PANEL_COOKIE));
+    const hadStaleCookie = Boolean(readRequestCookie(req, panelSessionCookieName(req)));
     const secure = secureCookieForRequest(req);
     if (pathname.startsWith('/api/')) {
       const res = NextResponse.json({ ok: false, error: 'biometric passkey login required' }, { status: 401 });
-      if (hadStaleCookie) clearPanelSessionCookie(res, secure);
+      if (hadStaleCookie) clearPanelSessionCookie(res, secure, req);
       return applySecurityHeaders(res, req);
     }
     const url = req.nextUrl.clone();
     url.pathname = '/login';
     url.search = `?next=${encodeURIComponent(safeNextPath(`${pathname}${req.nextUrl.search}`))}`;
     const res = NextResponse.redirect(url);
-    if (hadStaleCookie) clearPanelSessionCookie(res, secure);
+    if (hadStaleCookie) clearPanelSessionCookie(res, secure, req);
     return applySecurityHeaders(res, req);
   }
 
   // Every authenticated response carries the re-signed cookie when the session was slid.
   const finish = (res: NextResponse): NextResponse => {
     if (verified.refreshedCookie) {
-      setPanelSessionCookie(res, verified.refreshedCookie, secureCookieForRequest(req));
+      setPanelSessionCookie(res, verified.refreshedCookie, secureCookieForRequest(req), req);
     }
     return applySecurityHeaders(res, req);
   };

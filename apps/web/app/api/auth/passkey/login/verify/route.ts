@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import {
-  PANEL_CSRF_COOKIE,
   clientRateLimitScope,
   createPanelSessionCookie,
   guardApiRequest,
+  panelCsrfCookieName,
   safeNextPath,
   secureCookieForRequest,
   setPanelSessionCookie,
@@ -49,9 +49,9 @@ export async function POST(req: Request) {
     });
     const secure = secureCookieForRequest(req);
     const res = NextResponse.json({ ok: true, next, label: verified.label });
-    setPanelSessionCookie(res, sessionCookie, secure);
+    setPanelSessionCookie(res, sessionCookie, secure, req);
     clearWebAuthnChallengeCookie(res, req);
-    res.cookies.set(PANEL_CSRF_COOKIE, '', {
+    res.cookies.set(panelCsrfCookieName(req), '', {
       httpOnly: true,
       secure,
       sameSite: 'lax',
