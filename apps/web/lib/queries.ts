@@ -191,6 +191,7 @@ function detectDefaultLanIp(): string {
     if (!entries) continue;
     for (const addr of entries) {
       if (addr.internal || addr.family !== 'IPv4') continue;
+      if (addr.netmask === '255.255.255.255') continue;
       const [a, b] = addr.address.split('.').map(Number);
       const isPrivate = a === 10 || (a === 192 && b === 168) || (a === 172 && b !== undefined && b >= 16 && b <= 31);
       if (!isPrivate) continue;
@@ -236,7 +237,7 @@ export function getNetworkControlSummary(): NetworkControlSummary {
            p.up_flux_bps, p.down_flux_bps, p.updated_at,
            (
              SELECT COUNT(*) FROM router_wan_bindings wb
-             WHERE wb.wan_port = p.wan_name AND wb.rule_enabled = 1 AND wb.inherited_from_range = 0
+             WHERE wb.wan_port = p.wan_name AND wb.rule_enabled = 1 AND wb.inherited_from_range = 0 AND LOWER(COALESCE(wb.ip_group_name, '')) NOT IN ('ssh_wan1', 'ssh_wan2')
            ) AS pinned_device_count
     FROM router_wan_ports p
     ORDER BY p.wan_id ASC
@@ -245,7 +246,7 @@ export function getNetworkControlSummary(): NetworkControlSummary {
   const counts = conn.prepare(`
     SELECT
       (SELECT COUNT(*) FROM router_qos_limits WHERE download_limit_kbs > 0 OR upload_limit_kbs > 0) AS limited_count,
-      (SELECT COUNT(*) FROM router_wan_bindings WHERE rule_enabled = 1 AND inherited_from_range = 0) AS pinned_count,
+      (SELECT COUNT(*) FROM router_wan_bindings WHERE rule_enabled = 1 AND inherited_from_range = 0 AND LOWER(COALESCE(ip_group_name, '')) NOT IN ('ssh_wan1', 'ssh_wan2')) AS pinned_count,
       (SELECT COUNT(*) FROM dhcp_reservations) AS reserved_count,
       (SELECT COUNT(*) FROM device_auto_qos WHERE state IN ('pending', 'applied')) AS quarantined_count
   `).get() as { limited_count: number; pinned_count: number; reserved_count: number; quarantined_count: number };
@@ -276,11 +277,14 @@ export function getNetworkControlSummary(): NetworkControlSummary {
   let wan2InternalPort: number | null = null;
   try {
     if (sshTargetIp) {
+      const sshPrefix = sshTargetIp.split('.').slice(0, 3).join('.');
+      const wan1Vip = `${sshPrefix}.241`;
+      const wan2Vip = `${sshPrefix}.242`;
       const pmRows = conn.prepare(`
         SELECT wan_id, internal_port, external_port, enabled
         FROM router_port_mappings
-        WHERE server_ip = ? AND external_port = ? AND enabled = 1
-      `).all(sshTargetIp, sshExternalPort) as Array<{
+        WHERE server_ip IN (?, ?, ?) AND external_port = ? AND enabled = 1
+      `).all(sshTargetIp, wan1Vip, wan2Vip, sshExternalPort) as Array<{
         wan_id: number;
         internal_port: number;
         external_port: number;

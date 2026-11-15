@@ -141,6 +141,8 @@ export function detectLocalLanIpv4(routerHost?: string): string | null {
     if (!entries) continue;
     for (const addr of entries) {
       if (addr.internal || addr.family !== 'IPv4') continue;
+      // Skip /32 secondary VIP aliases (e.g. .241/.242 symmetric SSH VIPs) when detecting primary LAN IP
+      if (addr.netmask === '255.255.255.255') continue;
       if (!isValidLanIpv4(addr.address)) continue;
       if (prefix && addr.address.startsWith(prefix)) {
         return addr.address;
@@ -149,6 +151,55 @@ export function detectLocalLanIpv4(routerHost?: string): string | null {
     }
   }
   return candidates[0] ?? null;
+}
+
+export function listLocalIpv4Set(): Set<string> {
+  const out = new Set<string>(['127.0.0.1']);
+  const nets = os.networkInterfaces();
+  for (const entries of Object.values(nets)) {
+    if (!entries) continue;
+    for (const addr of entries) {
+      if (addr.family === 'IPv4' && addr.address) {
+        out.add(addr.address);
+      }
+    }
+  }
+  return out;
+}
+
+export interface SymmetricSshVips {
+  wan1Ip: string;
+  wan2Ip: string;
+  wan1Vip: string;
+  wan2Vip: string;
+  symmetricVipsActive: boolean;
+}
+
+/**
+ * Tenda W30E's Multi-WAN routes return packets purely by LAN source IP (no connmark on DNAT).
+ * When secondary /32 VIP aliases `<subnet>.241` and `<subnet>.242` exist on the local Mac interface,
+ * we forward `WAN1 -> .241:22` (pinned via `SSH_WAN1` to `WAN1`) and `WAN2 -> .242:22` (pinned via
+ * `SSH_WAN2` to `WAN2`) while keeping the Mac's primary IP (`.7`) on Smart Load Balancing (`auto`).
+ */
+export function resolveSymmetricSshVips(
+  targetIp: string,
+  localIps: Set<string> = listLocalIpv4Set(),
+): SymmetricSshVips {
+  const ip = targetIp.trim();
+  if (!isValidLanIpv4(ip)) {
+    return { wan1Ip: ip, wan2Ip: ip, wan1Vip: ip, wan2Vip: ip, symmetricVipsActive: false };
+  }
+  const prefix = ip.split('.').slice(0, 3).join('.');
+  const wan1Vip = `${prefix}.241`;
+  const wan2Vip = `${prefix}.242`;
+  const active = localIps.has(ip) && localIps.has(wan1Vip) && localIps.has(wan2Vip);
+  return {
+    wan1Ip: active ? wan1Vip : ip,
+    wan2Ip: active ? wan2Vip : ip,
+    wan1Vip,
+    wan2Vip,
+    symmetricVipsActive: active,
+  };
 }
 
 export function isLocalIpv4(ip: string): boolean {

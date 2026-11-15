@@ -16,6 +16,7 @@ import {
   getSshAccessConfig,
   isValidExternalSshPort,
   probeWanPublicIps,
+  resolveSymmetricSshVips,
   setSshAccessConfig,
   syncPortMappingsToDb,
 } from './wan-public-ip.js';
@@ -168,9 +169,12 @@ export function startControlServer(
           return;
         }
 
+        const vips = resolveSymmetricSshVips(targetIp);
         const applied = await router.configureSshPortMapping({
           enabled,
           targetIp,
+          wan1TargetIp: vips.wan1Ip,
+          wan2TargetIp: vips.wan2Ip,
           externalPort,
         });
         if (!applied.ok) {

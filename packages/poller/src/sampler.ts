@@ -24,6 +24,7 @@ import {
   getSshAccessConfig,
   isLocalIpv4,
   probeWanPublicIps,
+  resolveSymmetricSshVips,
   syncPortMappingsToDb,
 } from './wan-public-ip.js';
 
@@ -155,16 +156,19 @@ export class Sampler {
       let mappings = await this.router.getPortMappings();
       const sshCfg = getSshAccessConfig(this.db, this.router.getHost());
       if (sshCfg.enabled && sshCfg.targetIp) {
+        const vips = resolveSymmetricSshVips(sshCfg.targetIp);
         const hasWan1 = mappings.some(
-          (m) => m.wanId === 1 && m.serverIp === sshCfg.targetIp && m.externalPort === sshCfg.externalPort && m.enabled,
+          (m) => m.wanId === 1 && m.serverIp === vips.wan1Ip && m.externalPort === sshCfg.externalPort && m.enabled,
         );
         const hasWan2 = mappings.some(
-          (m) => m.wanId === 2 && m.serverIp === sshCfg.targetIp && m.externalPort === sshCfg.externalPort && m.enabled,
+          (m) => m.wanId === 2 && m.serverIp === vips.wan2Ip && m.externalPort === sshCfg.externalPort && m.enabled,
         );
         if (!hasWan1 || !hasWan2) {
           await this.router.configureSshPortMapping({
             enabled: true,
             targetIp: sshCfg.targetIp,
+            wan1TargetIp: vips.wan1Ip,
+            wan2TargetIp: vips.wan2Ip,
             externalPort: sshCfg.externalPort,
           });
           mappings = await this.router.getPortMappings();

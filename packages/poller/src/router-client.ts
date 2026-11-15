@@ -1040,6 +1040,8 @@ export class RouterClient {
   async configureSshPortMapping(opts: {
     enabled: boolean;
     targetIp: string;
+    wan1TargetIp?: string;
+    wan2TargetIp?: string;
     externalPort: number;
     internalPortWan1?: number;
     fallbackInternalPortWan2?: number;
@@ -1052,9 +1054,33 @@ export class RouterClient {
     wan2Rule: RouterPortMappingRule | null;
     usedFallbackPortWan2: boolean;
   }> {
+    const ip = opts.targetIp.trim();
+    const wan1Ip = (opts.wan1TargetIp ?? ip).trim();
+    const wan2Ip = (opts.wan2TargetIp ?? ip).trim();
+    const prefix = isValidLanIpv4(ip) ? ip.split('.').slice(0, 3).join('.') : null;
+    const defaultWan1Vip = prefix ? `${prefix}.241` : wan1Ip;
+    const defaultWan2Vip = prefix ? `${prefix}.242` : wan2Ip;
+
+    if (isValidLanIpv4(ip) && isValidLanIpv4(wan1Ip) && isValidLanIpv4(wan2Ip)) {
+      if (opts.enabled) {
+        if (wan1Ip !== ip) {
+          await this.setDeviceWanBinding({ ip: wan1Ip, groupName: 'ssh_wan1', wanPort: 'WAN1' });
+        }
+        if (wan2Ip !== ip) {
+          await this.setDeviceWanBinding({ ip: wan2Ip, groupName: 'ssh_wan2', wanPort: 'WAN2' });
+        }
+      } else {
+        if (wan1Ip !== ip || defaultWan1Vip !== ip) {
+          await this.setDeviceWanBinding({ ip: wan1Ip !== ip ? wan1Ip : defaultWan1Vip, wanPort: 'auto' });
+        }
+        if (wan2Ip !== ip || defaultWan2Vip !== ip) {
+          await this.setDeviceWanBinding({ ip: wan2Ip !== ip ? wan2Ip : defaultWan2Vip, wanPort: 'auto' });
+        }
+      }
+    }
+
     return this.enqueueMutation(async () => {
-      const ip = opts.targetIp.trim();
-      if (!isValidLanIpv4(ip)) {
+      if (!isValidLanIpv4(ip) || !isValidLanIpv4(wan1Ip) || !isValidLanIpv4(wan2Ip)) {
         return {
           ok: false,
           code: 'INVALID_LAN_IP',
@@ -1081,6 +1107,7 @@ export class RouterClient {
       const intWan1 = opts.internalPortWan1 ?? DEFAULT_SSH_INTERNAL_PORT;
       const fallbackWan2 = opts.fallbackInternalPortWan2 ?? FALLBACK_SSH_WAN2_INTERNAL_PORT;
       const sshInternalPorts = new Set([intWan1, fallbackWan2]);
+      const managedSshIps = new Set([ip, wan1Ip, wan2Ip, defaultWan1Vip, defaultWan2Vip]);
 
       const initial = await this.call<{
         getDMZ?: Array<Record<string, unknown>>;
@@ -1111,7 +1138,7 @@ export class RouterClient {
         for (const pm of rawList) {
           const pmIp = String(pm.portMappingServer ?? '').trim();
           const pmInt = Number(pm.porMappingtInternal ?? pm.portMappingInternal ?? 0);
-          if (pmIp === ip && sshInternalPorts.has(pmInt) && pm.portMappingEn === true) {
+          if (managedSshIps.has(pmIp) && sshInternalPorts.has(pmInt) && pm.portMappingEn === true) {
             await this.call(['setPortMapping'], {
               setPortMapping: {
                 type: 'switch',
@@ -1132,6 +1159,7 @@ export class RouterClient {
 
       const upsertWanRule = async (
         wanZeroIdx: 0 | 1,
+        serverIp: string,
         internalPort: number,
         snapshot: Array<Record<string, unknown>>,
       ): Promise<boolean> => {
@@ -1140,21 +1168,22 @@ export class RouterClient {
           const pmIp = String(pm.portMappingServer ?? '').trim();
           const pmInt = Number(pm.porMappingtInternal ?? pm.portMappingInternal ?? 0);
           const pmExt = Number(pm.portMappingExternal ?? 0);
-          return pmWan === wanZeroIdx && pmIp === ip && (sshInternalPorts.has(pmInt) || pmExt === extPort);
+          return pmWan === wanZeroIdx && managedSshIps.has(pmIp) && (sshInternalPorts.has(pmInt) || pmExt === extPort);
         });
 
         if (existing) {
           const id = Number(existing.ID);
+          const curIp = String(existing.portMappingServer ?? '').trim();
           const curInt = Number(existing.porMappingtInternal ?? existing.portMappingInternal ?? 0);
           const curExt = Number(existing.portMappingExternal ?? 0);
           const curProto = Number(existing.portMappingProtocol ?? -1);
-          if (curInt !== internalPort || curExt !== extPort || curProto !== 1) {
+          if (curIp !== serverIp || curInt !== internalPort || curExt !== extPort || curProto !== 1) {
             const editResp = await this.call<{ setPortMapping?: number }>(['setPortMapping'], {
               setPortMapping: {
                 type: 'edit',
                 data: {
                   ID: id,
-                  portMappingServer: ip,
+                  portMappingServer: serverIp,
                   porMappingtInternal: String(internalPort),
                   portMappingExternal: String(extPort),
                   portMappingProtocol: 1,
@@ -1184,7 +1213,7 @@ export class RouterClient {
           setPortMapping: {
             type: 'add',
             data: {
-              portMappingServer: ip,
+              portMappingServer: serverIp,
               porMappingtInternal: String(internalPort),
               portMappingExternal: String(extPort),
               portMappingProtocol: 1,
@@ -1195,12 +1224,12 @@ export class RouterClient {
         return addResp.setPortMapping === undefined || Number(addResp.setPortMapping) === 0;
       };
 
-      const wan1Ok = await upsertWanRule(0, intWan1, rawList);
+      const wan1Ok = await upsertWanRule(0, wan1Ip, intWan1, rawList);
       if (!wan1Ok) {
         return {
           ok: false,
           code: 'ROUTER_REJECTED_WAN1_PORT_MAP',
-          error: `Router rejected SSH port mapping on WAN1 (${extPort} -> ${ip}:${intWan1}).`,
+          error: `Router rejected SSH port mapping on WAN1 (${extPort} -> ${wan1Ip}:${intWan1}).`,
           dmzDisabled,
           wan1Rule: null,
           wan2Rule: null,
@@ -1215,13 +1244,13 @@ export class RouterClient {
       const listAfterWan1 = Array.isArray(afterWan1.getPortMapping) ? afterWan1.getPortMapping : [];
 
       let usedFallbackPortWan2 = false;
-      const wan2DirectOk = await upsertWanRule(1, intWan1, listAfterWan1);
+      const wan2DirectOk = await upsertWanRule(1, wan2Ip, intWan1, listAfterWan1);
       let finalMappings = await this.getPortMappings();
       let wan2Rule =
         finalMappings.find(
           (m) =>
             m.wanId === 2 &&
-            m.serverIp === ip &&
+            m.serverIp === wan2Ip &&
             m.externalPort === extPort &&
             m.internalPort === intWan1 &&
             m.protocol === 1 &&
@@ -1234,14 +1263,14 @@ export class RouterClient {
           { getPortMapping: '' },
         );
         const listAfterAttempt = Array.isArray(afterAttempt.getPortMapping) ? afterAttempt.getPortMapping : [];
-        const fallbackOk = await upsertWanRule(1, fallbackWan2, listAfterAttempt);
+        const fallbackOk = await upsertWanRule(1, wan2Ip, fallbackWan2, listAfterAttempt);
         usedFallbackPortWan2 = fallbackOk;
         finalMappings = await this.getPortMappings();
         wan2Rule =
           finalMappings.find(
             (m) =>
               m.wanId === 2 &&
-              m.serverIp === ip &&
+              m.serverIp === wan2Ip &&
               m.externalPort === extPort &&
               m.internalPort === fallbackWan2 &&
               m.protocol === 1 &&
@@ -1253,17 +1282,17 @@ export class RouterClient {
         finalMappings.find(
           (m) =>
             m.wanId === 1 &&
-            m.serverIp === ip &&
+            m.serverIp === wan1Ip &&
             m.externalPort === extPort &&
             m.internalPort === intWan1 &&
             m.protocol === 1 &&
             m.enabled,
         ) ?? null;
 
-      // Disable any leftover SSH rules on `ip` that do not match the active WAN1/WAN2 rule IDs
+      // Disable any leftover SSH rules on `ip`/VIPs that do not match the active WAN1/WAN2 rule IDs
       const keepIds = new Set([wan1Rule?.id, wan2Rule?.id].filter((v): v is number => typeof v === 'number'));
       for (const m of finalMappings) {
-        if (m.serverIp === ip && sshInternalPorts.has(m.internalPort) && m.enabled && !keepIds.has(m.id)) {
+        if (managedSshIps.has(m.serverIp) && sshInternalPorts.has(m.internalPort) && m.enabled && !keepIds.has(m.id)) {
           await this.call(['setPortMapping'], {
             setPortMapping: { type: 'switch', data: { ID: m.id, portMappingEn: false } },
           });

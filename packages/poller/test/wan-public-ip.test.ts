@@ -16,6 +16,7 @@ import {
   getSshAccessConfig,
   parseCloudflareTraceIp,
   probeWanPublicIps,
+  resolveSymmetricSshVips,
   setSshAccessConfig,
   syncPortMappingsToDb,
 } from '../src/wan-public-ip.js';
@@ -45,9 +46,14 @@ class MockWanSshRouterClient extends RouterClient {
     { ID: 1, dmzEn: true, dmzHost: '192.168.0.7', vpnFilter: false },
     { ID: 2, dmzEn: false, dmzHost: '', vpnFilter: false },
   ];
+  public ipGroups: any[] = [];
+  public wanRouteRules: any[] = [];
+  public wanRoutePolicy: any = { wanRoutePolicyType: 'custom', wanDetectEn: true, wanDetectUrl: '8.8.8.8', wanDetectInterval: 5 };
   public rejectDuplicateInternalPort22 = false;
   private nextRouteId = 10;
   private nextPortMapId = 10;
+  private nextIpGroupId = 20;
+  private nextWanRuleId = 20;
 
   constructor() {
     super('192.168.0.1', 'test');
@@ -62,6 +68,51 @@ class MockWanSshRouterClient extends RouterClient {
       if (m === 'getStaticRoute') out.getStaticRoute = structuredClone(this.staticRoutes);
       if (m === 'getPortMapping') out.getPortMapping = structuredClone(this.portMappings);
       if (m === 'getDMZ') out.getDMZ = structuredClone(this.dmzEntries);
+      if (m === 'getIPGroupList') out.getIPGroupList = structuredClone(this.ipGroups);
+      if (m === 'getWanRouteRules') out.getWanRouteRules = structuredClone(this.wanRouteRules);
+      if (m === 'getWanRoutePolicy') out.getWanRoutePolicy = structuredClone(this.wanRoutePolicy);
+      if (m === 'setWanRoutePolicy') out.setWanRoutePolicy = 0;
+
+      if (m === 'setIPGroupList') {
+        const req = body.setIPGroupList as any;
+        if (req.type === 'add') {
+          this.ipGroups.push({
+            ID: this.nextIpGroupId++,
+            IPGroupRefer: 0,
+            IPGroupDefaultTag: false,
+            ...req.data,
+          });
+        } else if (req.type === 'edit') {
+          const idx = this.ipGroups.findIndex((g) => Number(g.ID) === Number(req.data.ID));
+          if (idx >= 0) this.ipGroups[idx] = { ...this.ipGroups[idx], ...req.data };
+        } else if (req.type === 'delete') {
+          const ids = new Set((req.data as number[]).map(Number));
+          this.ipGroups = this.ipGroups.filter((g) => !ids.has(Number(g.ID)));
+        }
+        out.setIPGroupList = 0;
+      }
+
+      if (m === 'setWanRouteRules') {
+        const req = body.setWanRouteRules as any;
+        if (req.type === 'add') {
+          this.wanRouteRules.push({ ID: this.nextWanRuleId++, ...req.data });
+          const g = this.ipGroups.find((ig) => ig.IPGroupName === req.data.IPGroupName);
+          if (g) g.IPGroupRefer = 1;
+        } else if (req.type === 'edit') {
+          const idx = this.wanRouteRules.findIndex((r) => Number(r.ID) === Number(req.data.ID));
+          if (idx >= 0) this.wanRouteRules[idx] = { ...this.wanRouteRules[idx], ...req.data };
+        } else if (req.type === 'delete') {
+          const ids = new Set((req.data as number[]).map(Number));
+          for (const r of this.wanRouteRules) {
+            if (ids.has(Number(r.ID))) {
+              const g = this.ipGroups.find((ig) => ig.IPGroupName === r.IPGroupName);
+              if (g) g.IPGroupRefer = 0;
+            }
+          }
+          this.wanRouteRules = this.wanRouteRules.filter((r) => !ids.has(Number(r.ID)));
+        }
+        out.setWanRouteRules = 0;
+      }
 
       if (m === 'setStaticRoute') {
         const req = body.setStaticRoute as any;
@@ -405,4 +456,68 @@ test('control-server /ssh-access configures router + SQLite cache and TelegramNo
   } finally {
     await new Promise<void>((resolve) => srv.close(() => resolve()));
   }
+});
+
+test('resolveSymmetricSshVips & configureSshPortMapping pin SSH_WAN1 (.241) and SSH_WAN2 (.242) to eliminate Dual-WAN asymmetric routing', async () => {
+  const withoutVips = resolveSymmetricSshVips('192.168.0.7', new Set(['192.168.0.7']));
+  assert.deepEqual(withoutVips, {
+    wan1Ip: '192.168.0.7',
+    wan2Ip: '192.168.0.7',
+    wan1Vip: '192.168.0.241',
+    wan2Vip: '192.168.0.242',
+    symmetricVipsActive: false,
+  });
+
+  const withVips = resolveSymmetricSshVips('192.168.0.7', new Set(['192.168.0.7', '192.168.0.241', '192.168.0.242']));
+  assert.deepEqual(withVips, {
+    wan1Ip: '192.168.0.241',
+    wan2Ip: '192.168.0.242',
+    wan1Vip: '192.168.0.241',
+    wan2Vip: '192.168.0.242',
+    symmetricVipsActive: true,
+  });
+
+  const router = new MockWanSshRouterClient();
+  // Pre-seed an active single-IP SSH port map on 192.168.0.7 to prove migration disables stale rules cleanly
+  router.portMappings = [
+    { ID: 1, portMappingEn: true, porMappingtInternal: '22', portMappingExternal: '22222', portMappingProtocol: 1, portMappingServer: '192.168.0.7', portMappingWan: 0 },
+    { ID: 3, portMappingEn: true, porMappingtInternal: '22', portMappingExternal: '22222', portMappingProtocol: 1, portMappingServer: '192.168.0.7', portMappingWan: 1 },
+  ];
+
+  const res = await router.configureSshPortMapping({
+    enabled: true,
+    targetIp: '192.168.0.7',
+    wan1TargetIp: withVips.wan1Ip,
+    wan2TargetIp: withVips.wan2Ip,
+    externalPort: 22222,
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.wan1Rule?.serverIp, '192.168.0.241');
+  assert.equal(res.wan1Rule?.internalPort, 22);
+  assert.equal(res.wan2Rule?.serverIp, '192.168.0.242');
+  assert.equal(res.wan2Rule?.internalPort, 22);
+  assert.equal(res.usedFallbackPortWan2, false);
+
+  // Stale 192.168.0.7 rules must be disabled so WAN1/WAN2 external port 22222 never collides
+  const oldRules = router.portMappings.filter((pm) => pm.portMappingServer === '192.168.0.7');
+  assert.equal(oldRules.every((pm) => pm.portMappingEn === false), true);
+
+  // Stage 1 + Stage 2 Multi-WAN rules must pin .241 -> WAN1 and .242 -> WAN2
+  const wan1Bind = router.wanRouteRules.find((r) => r.IPGroupName === 'ssh_wan1');
+  const wan2Bind = router.wanRouteRules.find((r) => r.IPGroupName === 'ssh_wan2');
+  assert.equal(wan1Bind?.wanRouteRuleWAN, 'WAN1');
+  assert.equal(wan2Bind?.wanRouteRuleWAN, 'WAN2');
+
+  // Disabling cleans up both VIP port mappings and VIP Multi-WAN bindings
+  const off = await router.configureSshPortMapping({
+    enabled: false,
+    targetIp: '192.168.0.7',
+    wan1TargetIp: withVips.wan1Ip,
+    wan2TargetIp: withVips.wan2Ip,
+    externalPort: 22222,
+  });
+  assert.equal(off.ok, true);
+  assert.equal(router.portMappings.every((pm) => pm.portMappingEn === false), true);
+  assert.equal(router.wanRouteRules.length, 0);
 });
