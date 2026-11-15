@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import dns from 'node:dns';
 import fs from 'node:fs';
 import https from 'node:https';
@@ -27,11 +28,21 @@ export const DEFAULT_DDNS_REVERIFY_MS = 15 * 60 * 1000;
 
 export interface CloudflareDdnsConfig {
   enabled: boolean;
+  mode: 'direct-api' | 'ssh-relay' | 'disabled';
   apiToken: string;
   zoneId: string;
+  sshHost: string;
+  remoteScript: string;
   wan1Fqdn: string;
   wan2Fqdn: string;
 }
+
+export type DdnsSshExecFn = (
+  sshHost: string,
+  remoteScript: string,
+  fqdn: string,
+  ip: string,
+) => Promise<{ ok: boolean; error?: string }>;
 
 export interface CloudflareDdnsWanOutcome {
   fqdn: string;
@@ -42,6 +53,8 @@ export interface CloudflareDdnsWanOutcome {
 
 const VALID_FQDN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const VALID_ZONE_ID_RE = /^[a-zA-Z0-9_-]{4,64}$/;
+const VALID_SSH_HOST_RE = /^[a-zA-Z0-9._-]{1,128}$/;
+const VALID_REMOTE_SCRIPT_RE = /^\/[a-zA-Z0-9._/-]{1,256}$/;
 
 export function normalizeDdnsFqdn(raw: unknown): string {
   if (typeof raw !== 'string') return '';
@@ -58,6 +71,25 @@ export function loadCloudflareDdnsConfigFromEnv(
   env: Record<string, string | undefined> = process.env,
   filePath?: string,
 ): CloudflareDdnsConfig {
+  // Never implicitly load live host credentials inside Node's test runner unless explicitly requested
+  if (
+    env === process.env &&
+    filePath === undefined &&
+    !env.TENDA_CLOUDFLARE_DDNS_FILE &&
+    env.NODE_TEST_CONTEXT
+  ) {
+    return {
+      enabled: false,
+      mode: 'disabled',
+      apiToken: '',
+      zoneId: '',
+      sshHost: '',
+      remoteScript: '',
+      wan1Fqdn: '',
+      wan2Fqdn: '',
+    };
+  }
+
   const resolvedFile =
     filePath !== undefined
       ? filePath
@@ -66,6 +98,8 @@ export function loadCloudflareDdnsConfigFromEnv(
   let fileJson: Partial<{
     apiToken: string;
     zoneId: string;
+    sshHost: string;
+    remoteScript: string;
     wan1Fqdn: string;
     wan2Fqdn: string;
   }> = {};
@@ -83,13 +117,86 @@ export function loadCloudflareDdnsConfigFromEnv(
 
   const apiToken = (env.CF_API_TOKEN ?? fileJson.apiToken ?? '').trim();
   const zoneId = (env.CF_ZONE_ID ?? fileJson.zoneId ?? '').trim();
+  const rawSshHost = (env.CF_DDNS_SSH_HOST ?? fileJson.sshHost ?? '').trim();
+  const rawRemoteScript = (env.CF_DDNS_REMOTE_SCRIPT ?? fileJson.remoteScript ?? '').trim();
+  const sshHost = VALID_SSH_HOST_RE.test(rawSshHost) ? rawSshHost : '';
+  const remoteScript = VALID_REMOTE_SCRIPT_RE.test(rawRemoteScript) ? rawRemoteScript : '';
   const wan1Fqdn = normalizeDdnsFqdn(env.CF_DDNS_WAN1_FQDN ?? fileJson.wan1Fqdn);
   const wan2Fqdn = normalizeDdnsFqdn(env.CF_DDNS_WAN2_FQDN ?? fileJson.wan2Fqdn);
-  const enabled =
-    apiToken.length > 0 &&
-    VALID_ZONE_ID_RE.test(zoneId) &&
-    (wan1Fqdn.length > 0 || wan2Fqdn.length > 0);
-  return { enabled, apiToken, zoneId, wan1Fqdn, wan2Fqdn };
+
+  const hasFqdn = wan1Fqdn.length > 0 || wan2Fqdn.length > 0;
+  if (hasFqdn && sshHost && remoteScript) {
+    return {
+      enabled: true,
+      mode: 'ssh-relay',
+      apiToken: '',
+      zoneId: '',
+      sshHost,
+      remoteScript,
+      wan1Fqdn,
+      wan2Fqdn,
+    };
+  }
+
+  if (hasFqdn && apiToken.length > 0 && VALID_ZONE_ID_RE.test(zoneId)) {
+    return {
+      enabled: true,
+      mode: 'direct-api',
+      apiToken,
+      zoneId,
+      sshHost: '',
+      remoteScript: '',
+      wan1Fqdn,
+      wan2Fqdn,
+    };
+  }
+
+  return {
+    enabled: false,
+    mode: 'disabled',
+    apiToken: '',
+    zoneId: '',
+    sshHost: '',
+    remoteScript: '',
+    wan1Fqdn,
+    wan2Fqdn,
+  };
+}
+
+export function execSshDdnsRelay(
+  sshHost: string,
+  remoteScript: string,
+  fqdn: string,
+  ip: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      '/usr/bin/ssh',
+      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', sshHost, '/usr/bin/php', remoteScript, fqdn, ip],
+      { timeout: 12_000, maxBuffer: 64 * 1024 },
+      (err, stdout, stderr) => {
+        const lines = String(stdout ?? '')
+          .trim()
+          .split(/\r?\n/)
+          .filter(Boolean);
+        const lastLine = lines[lines.length - 1] ?? '';
+        try {
+          const parsed = JSON.parse(lastLine) as { ok?: boolean; error?: string };
+          if (parsed && typeof parsed.ok === 'boolean') {
+            resolve({ ok: parsed.ok, error: parsed.error });
+            return;
+          }
+        } catch {
+          // fall through
+        }
+        if (err) {
+          resolve({ ok: false, error: (stderr || err.message || 'SSH DDNS relay failed').trim() });
+          return;
+        }
+        resolve({ ok: false, error: 'Invalid JSON response from SSH DDNS relay' });
+      },
+    );
+  });
 }
 
 function redactSecrets(message: string, secrets: string[]): string {
@@ -422,6 +529,7 @@ export interface SyncCloudflareWanDnsOptions {
   force?: boolean;
   reverifyIntervalMs?: number;
   fetchFn?: typeof fetch;
+  sshExecFn?: DdnsSshExecFn;
 }
 
 export async function syncCloudflareWanDns(
@@ -438,6 +546,7 @@ export async function syncCloudflareWanDns(
   const force = Boolean(opts.force);
   const reverifyMs = opts.reverifyIntervalMs ?? DEFAULT_DDNS_REVERIFY_MS;
   const fetchImpl = opts.fetchFn ?? fetch;
+  const sshImpl = opts.sshExecFn ?? execSshDdnsRelay;
 
   const ports = db
     .prepare(`
@@ -497,6 +606,16 @@ export async function syncCloudflareWanDns(
       }
 
       try {
+        if (cfg.mode === 'ssh-relay') {
+          const relayRes = await sshImpl(cfg.sshHost, cfg.remoteScript, targetFqdn, publicIp);
+          if (!relayRes.ok) {
+            throw new Error(relayRes.error || 'SSH DDNS relay returned failure');
+          }
+          markOk.run({ wan_id: port.wan_id, fqdn: targetFqdn, ip: publicIp, now });
+          updated.set(port.wan_id, { fqdn: targetFqdn, ok: true, skipped: false });
+          return;
+        }
+
         const baseUrl = `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(cfg.zoneId)}/dns_records`;
         const authHeaders = {
           Authorization: `Bearer ${cfg.apiToken}`,
@@ -600,6 +719,7 @@ export interface ProbeWanPublicIpsOptions {
   dnsProbeFn?: (dnsServerIp: string) => Promise<string | null>;
   ddnsConfig?: CloudflareDdnsConfig;
   ddnsFetchFn?: typeof fetch;
+  ddnsSshExecFn?: DdnsSshExecFn;
   forceDdnsSync?: boolean;
 }
 
@@ -748,6 +868,7 @@ export async function probeWanPublicIps(
       now,
       force: opts.forceDdnsSync,
       fetchFn: opts.ddnsFetchFn,
+      sshExecFn: opts.ddnsSshExecFn,
     },
   );
 

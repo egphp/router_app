@@ -743,3 +743,83 @@ test('syncCloudflareWanDns & probeWanPublicIps manage DNS-Only A records idempot
   // Previous synced IP remains intact during transient error
   assert.equal(errRow.ddns_synced_ip, '156.196.250.77');
 });
+
+test('syncCloudflareWanDns supports tokenless ssh-relay mode so CF_API_TOKEN never leaves the IP-allowlisted server', async () => {
+  const db = createTestDb();
+  const router = new MockWanSshRouterClient();
+  const t0 = 1_700_200_000_000;
+
+  syncTrafficControlToDb(
+    db,
+    {
+      qosPolicy: 2,
+      wanRoutePolicyType: 'custom',
+      wanPorts: [
+        { wanId: 1, wanName: 'WAN1', status: 'wired', wanType: 'static', wanIp: '192.168.3.13', wanGateway: '192.168.3.1', upFluxBps: 100, downFluxBps: 200 },
+        { wanId: 2, wanName: 'WAN2', status: 'wired', wanType: 'static', wanIp: '192.168.2.17', wanGateway: '192.168.2.1', upFluxBps: 50, downFluxBps: 100 },
+      ],
+      qosDevices: [],
+      wanBindings: [],
+    },
+    t0,
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tenda-ssh-relay-'));
+  const relayCfgFile = path.join(tmpDir, 'ddns.json');
+  fs.writeFileSync(
+    relayCfgFile,
+    JSON.stringify({
+      sshHost: 'relay-box',
+      remoteScript: '/opt/secrets/ddns_sync.php',
+      wan1Fqdn: 'w1-relay.example.net',
+      wan2Fqdn: 'w2-relay.example.net',
+    }),
+    { mode: 0o600 },
+  );
+
+  try {
+    const relayCfg = loadCloudflareDdnsConfigFromEnv({}, relayCfgFile);
+    assert.equal(relayCfg.enabled, true);
+    assert.equal(relayCfg.mode, 'ssh-relay');
+    assert.equal(relayCfg.apiToken, '');
+    assert.equal(relayCfg.zoneId, '');
+    assert.equal(relayCfg.sshHost, 'relay-box');
+    assert.equal(relayCfg.remoteScript, '/opt/secrets/ddns_sync.php');
+
+    const sshCalls: Array<{ sshHost: string; remoteScript: string; fqdn: string; ip: string }> = [];
+    const mockSshExec = async (sshHost: string, remoteScript: string, fqdn: string, ip: string) => {
+      sshCalls.push({ sshHost, remoteScript, fqdn, ip });
+      return { ok: true as const };
+    };
+
+    await probeWanPublicIps(db, router, {
+      now: t0 + 1000,
+      httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.235.143' : '156.196.19.204'),
+      dnsProbeFn: async () => null,
+      ddnsConfig: relayCfg,
+      ddnsSshExecFn: mockSshExec,
+    });
+
+    assert.equal(sshCalls.length, 2);
+    const rows = db
+      .prepare(`SELECT wan_id, ddns_fqdn, ddns_synced_ip, ddns_last_error FROM router_wan_ports ORDER BY wan_id ASC`)
+      .all();
+    assert.deepEqual(rows, [
+      { wan_id: 1, ddns_fqdn: 'w1-relay.example.net', ddns_synced_ip: '156.196.235.143', ddns_last_error: null },
+      { wan_id: 2, ddns_fqdn: 'w2-relay.example.net', ddns_synced_ip: '156.196.19.204', ddns_last_error: null },
+    ]);
+
+    // Subsequent poll with unchanged IPs skips SSH relay completely
+    sshCalls.length = 0;
+    await probeWanPublicIps(db, router, {
+      now: t0 + 61_000,
+      httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.235.143' : '156.196.19.204'),
+      dnsProbeFn: async () => null,
+      ddnsConfig: relayCfg,
+      ddnsSshExecFn: mockSshExec,
+    });
+    assert.equal(sshCalls.length, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
