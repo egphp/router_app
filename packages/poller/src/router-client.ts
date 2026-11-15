@@ -1,4 +1,10 @@
-import { isAic8800FallbackMac, type RouterDevice, type RouterSystemStatus, type RouterTrafficControlState } from '@tenda/shared';
+import {
+  isAic8800FallbackMac,
+  type RouterDevice,
+  type RouterPortMappingRule,
+  type RouterSystemStatus,
+  type RouterTrafficControlState,
+} from '@tenda/shared';
 import { log } from './logger.js';
 import {
   MAX_ROUTER_DHCP_STATIC_BINDS,
@@ -14,6 +20,13 @@ import {
   type RawRouterIpGroup,
   type RawRouterWanRule,
 } from './traffic-control.js';
+import {
+  DEFAULT_SSH_INTERNAL_PORT,
+  FALLBACK_SSH_WAN2_INTERNAL_PORT,
+  WAN1_PROBE_ENDPOINTS,
+  WAN2_PROBE_ENDPOINTS,
+  isValidExternalSshPort,
+} from './wan-public-ip.js';
 
 function encodePassword(plain: string): string {
   return Buffer.from(plain, 'utf-8').toString('base64');
@@ -905,6 +918,373 @@ export class RouterClient {
 
       log.info('router: added single-WAN binding', { ip, group: desiredGroupName, wanPort: targetWan });
       return { ok: true, applied: { ip, wanPort: targetWan, ipGroupName: desiredGroupName } };
+    });
+  }
+
+  /**
+   * Ensure `/32` host static routes exist on the Tenda W30E so dedicated public-IP
+   * echo endpoints always egress via `WAN1` and `WAN2` independently.
+   * Idempotent: makes zero `setStaticRoute` calls when routes already match.
+   */
+  async ensureWanProbeStaticRoutes(): Promise<{ ok: boolean; updatedCount: number }> {
+    return this.enqueueMutation(async () => {
+      const resp = await this.call<{
+        getWanInfo?: Array<Record<string, unknown>>;
+        getStaticRoute?: Array<Record<string, unknown>>;
+      }>(
+        ['getWanInfo', 'getStaticRoute'],
+        { getWanInfo: '', getStaticRoute: '' },
+      );
+
+      const wanPorts = normalizeWanPorts(resp.getWanInfo, parseFluxString);
+      const staticRoutes = Array.isArray(resp.getStaticRoute) ? resp.getStaticRoute : [];
+      let updatedCount = 0;
+
+      const desired: Array<{ ip: string; gateway: string; wanName: string }> = [];
+      for (const p of wanPorts) {
+        const connected = p.status === 'wired' || p.status === 'connected';
+        if (!connected || !p.wanGateway || ipv4ToInt(p.wanGateway) === null) continue;
+        if (p.wanId === 1) {
+          desired.push(
+            { ip: WAN1_PROBE_ENDPOINTS.httpsIp, gateway: p.wanGateway, wanName: 'WAN1' },
+            { ip: WAN1_PROBE_ENDPOINTS.dnsIp, gateway: p.wanGateway, wanName: 'WAN1' },
+          );
+        } else if (p.wanId === 2) {
+          desired.push(
+            { ip: WAN2_PROBE_ENDPOINTS.httpsIp, gateway: p.wanGateway, wanName: 'WAN2' },
+            { ip: WAN2_PROBE_ENDPOINTS.dnsIp, gateway: p.wanGateway, wanName: 'WAN2' },
+          );
+        }
+      }
+
+      for (const item of desired) {
+        const existing = staticRoutes.find(
+          (r) =>
+            String(r.staticRouteNet ?? '').trim() === item.ip &&
+            String(r.staticRouteMask ?? '').trim() === '255.255.255.255',
+        );
+        if (!existing) {
+          await this.call(['setStaticRoute'], {
+            setStaticRoute: {
+              type: 'add',
+              data: {
+                staticRouteNet: item.ip,
+                staticRouteMask: '255.255.255.255',
+                staticRouteGateway: item.gateway,
+                staticRouteWAN: item.wanName,
+              },
+            },
+          });
+          updatedCount++;
+        } else if (
+          String(existing.staticRouteGateway ?? '').trim() !== item.gateway ||
+          String(existing.staticRouteWAN ?? '').trim().toUpperCase() !== item.wanName
+        ) {
+          await this.call(['setStaticRoute'], {
+            setStaticRoute: {
+              type: 'edit',
+              data: {
+                ID: Number(existing.ID),
+                staticRouteNet: item.ip,
+                staticRouteMask: '255.255.255.255',
+                staticRouteGateway: item.gateway,
+                staticRouteWAN: item.wanName,
+              },
+            },
+          });
+          updatedCount++;
+        }
+      }
+
+      if (updatedCount > 0) {
+        log.info('router: synced /32 WAN public-IP probe static routes', { updatedCount });
+      }
+      return { ok: true, updatedCount };
+    });
+  }
+
+  /**
+   * Read Tenda W30E TCP/UDP port mapping rules (`controlers/portMapping.js`).
+   * Note firmware field typo `porMappingtInternal` and 0-based `portMappingWan` (`0` = WAN1, `1` = WAN2).
+   */
+  async getPortMappings(): Promise<RouterPortMappingRule[]> {
+    try {
+      const r = await this.call<{ getPortMapping?: Array<Record<string, unknown>> }>(
+        ['getPortMapping'],
+        { getPortMapping: '' },
+      );
+      const list = Array.isArray(r.getPortMapping) ? r.getPortMapping : [];
+      return list
+        .map((pm) => ({
+          id: Number(pm.ID ?? 0),
+          wanId: Number(pm.portMappingWan ?? 0) + 1,
+          serverIp: String(pm.portMappingServer ?? '').trim(),
+          internalPort: Number(pm.porMappingtInternal ?? pm.portMappingInternal ?? 0),
+          externalPort: Number(pm.portMappingExternal ?? 0),
+          protocol: Number(pm.portMappingProtocol ?? 0),
+          enabled: Boolean(pm.portMappingEn),
+        }))
+        .filter((pm) => pm.id > 0 && pm.serverIp.length > 0);
+    } catch (e) {
+      log.warn('router.getPortMappings failed', String(e));
+      return [];
+    }
+  }
+
+  /**
+   * Configure SSH-only TCP Port Mapping on both `WAN1` (`portMappingWan: 0`) and `WAN2` (`portMappingWan: 1`)
+   * while strictly disabling Tenda `DMZ` (`dmzEn: false`) so no non-SSH ports on the Mac are exposed.
+   * Automatically falls back to `fallbackInternalPortWan2` (`2222`) on `WAN2` if the router rejects
+   * duplicate internal port `22` across two rules for the same LAN IP.
+   */
+  async configureSshPortMapping(opts: {
+    enabled: boolean;
+    targetIp: string;
+    externalPort: number;
+    internalPortWan1?: number;
+    fallbackInternalPortWan2?: number;
+  }): Promise<{
+    ok: boolean;
+    code?: string;
+    error?: string;
+    dmzDisabled: boolean;
+    wan1Rule: RouterPortMappingRule | null;
+    wan2Rule: RouterPortMappingRule | null;
+    usedFallbackPortWan2: boolean;
+  }> {
+    return this.enqueueMutation(async () => {
+      const ip = opts.targetIp.trim();
+      if (!isValidLanIpv4(ip)) {
+        return {
+          ok: false,
+          code: 'INVALID_LAN_IP',
+          error: 'A valid private LAN IPv4 address is required for SSH port forwarding.',
+          dmzDisabled: false,
+          wan1Rule: null,
+          wan2Rule: null,
+          usedFallbackPortWan2: false,
+        };
+      }
+      const extPort = Number(opts.externalPort);
+      if (!isValidExternalSshPort(extPort)) {
+        return {
+          ok: false,
+          code: 'INVALID_SSH_PORT',
+          error: 'External SSH port must be 22 or between 1024 and 65535.',
+          dmzDisabled: false,
+          wan1Rule: null,
+          wan2Rule: null,
+          usedFallbackPortWan2: false,
+        };
+      }
+
+      const intWan1 = opts.internalPortWan1 ?? DEFAULT_SSH_INTERNAL_PORT;
+      const fallbackWan2 = opts.fallbackInternalPortWan2 ?? FALLBACK_SSH_WAN2_INTERNAL_PORT;
+      const sshInternalPorts = new Set([intWan1, fallbackWan2]);
+
+      const initial = await this.call<{
+        getDMZ?: Array<Record<string, unknown>>;
+        getPortMapping?: Array<Record<string, unknown>>;
+      }>(
+        ['getDMZ', 'getPortMapping'],
+        { getDMZ: '', getPortMapping: '' },
+      );
+
+      // Security invariant: never leave Tenda DMZ enabled (DMZ exposes all 65,535 ports on the Mac).
+      let dmzDisabled = true;
+      const dmzList = Array.isArray(initial.getDMZ) ? initial.getDMZ : [];
+      if (dmzList.some((d) => d.dmzEn === true)) {
+        const disabledDmz = dmzList.map((d) => ({
+          ...d,
+          dmzEn: false,
+        }));
+        const dmzResp = await this.call<{ setDMZ?: number }>(['setDMZ'], {
+          setDMZ: { type: 'edit', data: disabledDmz },
+        });
+        dmzDisabled = dmzResp.setDMZ === undefined || Number(dmzResp.setDMZ) === 0;
+        log.info('router: ensured Tenda DMZ is OFF so only SSH port mapping is exposed', { dmzDisabled });
+      }
+
+      const rawList = Array.isArray(initial.getPortMapping) ? initial.getPortMapping : [];
+
+      if (!opts.enabled) {
+        for (const pm of rawList) {
+          const pmIp = String(pm.portMappingServer ?? '').trim();
+          const pmInt = Number(pm.porMappingtInternal ?? pm.portMappingInternal ?? 0);
+          if (pmIp === ip && sshInternalPorts.has(pmInt) && pm.portMappingEn === true) {
+            await this.call(['setPortMapping'], {
+              setPortMapping: {
+                type: 'switch',
+                data: { ID: Number(pm.ID), portMappingEn: false },
+              },
+            });
+          }
+        }
+        log.info('router: disabled external SSH port mappings', { targetIp: ip });
+        return {
+          ok: true,
+          dmzDisabled,
+          wan1Rule: null,
+          wan2Rule: null,
+          usedFallbackPortWan2: false,
+        };
+      }
+
+      const upsertWanRule = async (
+        wanZeroIdx: 0 | 1,
+        internalPort: number,
+        snapshot: Array<Record<string, unknown>>,
+      ): Promise<boolean> => {
+        const existing = snapshot.find((pm) => {
+          const pmWan = Number(pm.portMappingWan ?? -1);
+          const pmIp = String(pm.portMappingServer ?? '').trim();
+          const pmInt = Number(pm.porMappingtInternal ?? pm.portMappingInternal ?? 0);
+          const pmExt = Number(pm.portMappingExternal ?? 0);
+          return pmWan === wanZeroIdx && pmIp === ip && (sshInternalPorts.has(pmInt) || pmExt === extPort);
+        });
+
+        if (existing) {
+          const id = Number(existing.ID);
+          const curInt = Number(existing.porMappingtInternal ?? existing.portMappingInternal ?? 0);
+          const curExt = Number(existing.portMappingExternal ?? 0);
+          const curProto = Number(existing.portMappingProtocol ?? -1);
+          if (curInt !== internalPort || curExt !== extPort || curProto !== 1) {
+            const editResp = await this.call<{ setPortMapping?: number }>(['setPortMapping'], {
+              setPortMapping: {
+                type: 'edit',
+                data: {
+                  ID: id,
+                  portMappingServer: ip,
+                  porMappingtInternal: String(internalPort),
+                  portMappingExternal: String(extPort),
+                  portMappingProtocol: 1,
+                  portMappingWan: wanZeroIdx,
+                },
+              },
+            });
+            if (editResp.setPortMapping !== undefined && Number(editResp.setPortMapping) !== 0) {
+              return false;
+            }
+          }
+          if (existing.portMappingEn !== true) {
+            const swResp = await this.call<{ setPortMapping?: number }>(['setPortMapping'], {
+              setPortMapping: {
+                type: 'switch',
+                data: { ID: id, portMappingEn: true },
+              },
+            });
+            if (swResp.setPortMapping !== undefined && Number(swResp.setPortMapping) !== 0) {
+              return false;
+            }
+          }
+          return true;
+        }
+
+        const addResp = await this.call<{ setPortMapping?: number }>(['setPortMapping'], {
+          setPortMapping: {
+            type: 'add',
+            data: {
+              portMappingServer: ip,
+              porMappingtInternal: String(internalPort),
+              portMappingExternal: String(extPort),
+              portMappingProtocol: 1,
+              portMappingWan: wanZeroIdx,
+            },
+          },
+        });
+        return addResp.setPortMapping === undefined || Number(addResp.setPortMapping) === 0;
+      };
+
+      const wan1Ok = await upsertWanRule(0, intWan1, rawList);
+      if (!wan1Ok) {
+        return {
+          ok: false,
+          code: 'ROUTER_REJECTED_WAN1_PORT_MAP',
+          error: `Router rejected SSH port mapping on WAN1 (${extPort} -> ${ip}:${intWan1}).`,
+          dmzDisabled,
+          wan1Rule: null,
+          wan2Rule: null,
+          usedFallbackPortWan2: false,
+        };
+      }
+
+      const afterWan1 = await this.call<{ getPortMapping?: Array<Record<string, unknown>> }>(
+        ['getPortMapping'],
+        { getPortMapping: '' },
+      );
+      const listAfterWan1 = Array.isArray(afterWan1.getPortMapping) ? afterWan1.getPortMapping : [];
+
+      let usedFallbackPortWan2 = false;
+      const wan2DirectOk = await upsertWanRule(1, intWan1, listAfterWan1);
+      let finalMappings = await this.getPortMappings();
+      let wan2Rule =
+        finalMappings.find(
+          (m) =>
+            m.wanId === 2 &&
+            m.serverIp === ip &&
+            m.externalPort === extPort &&
+            m.internalPort === intWan1 &&
+            m.protocol === 1 &&
+            m.enabled,
+        ) ?? null;
+
+      if (!wan2DirectOk || !wan2Rule) {
+        const afterAttempt = await this.call<{ getPortMapping?: Array<Record<string, unknown>> }>(
+          ['getPortMapping'],
+          { getPortMapping: '' },
+        );
+        const listAfterAttempt = Array.isArray(afterAttempt.getPortMapping) ? afterAttempt.getPortMapping : [];
+        const fallbackOk = await upsertWanRule(1, fallbackWan2, listAfterAttempt);
+        usedFallbackPortWan2 = fallbackOk;
+        finalMappings = await this.getPortMappings();
+        wan2Rule =
+          finalMappings.find(
+            (m) =>
+              m.wanId === 2 &&
+              m.serverIp === ip &&
+              m.externalPort === extPort &&
+              m.internalPort === fallbackWan2 &&
+              m.protocol === 1 &&
+              m.enabled,
+          ) ?? null;
+      }
+
+      const wan1Rule =
+        finalMappings.find(
+          (m) =>
+            m.wanId === 1 &&
+            m.serverIp === ip &&
+            m.externalPort === extPort &&
+            m.internalPort === intWan1 &&
+            m.protocol === 1 &&
+            m.enabled,
+        ) ?? null;
+
+      // Disable any leftover SSH rules on `ip` that do not match the active WAN1/WAN2 rule IDs
+      const keepIds = new Set([wan1Rule?.id, wan2Rule?.id].filter((v): v is number => typeof v === 'number'));
+      for (const m of finalMappings) {
+        if (m.serverIp === ip && sshInternalPorts.has(m.internalPort) && m.enabled && !keepIds.has(m.id)) {
+          await this.call(['setPortMapping'], {
+            setPortMapping: { type: 'switch', data: { ID: m.id, portMappingEn: false } },
+          });
+        }
+      }
+
+      log.info('router: configured Dual-WAN SSH TCP port mapping', {
+        targetIp: ip,
+        externalPort: extPort,
+        wan1Rule,
+        wan2Rule,
+        usedFallbackPortWan2,
+      });
+
+      return {
+        ok: Boolean(wan1Rule),
+        dmzDisabled,
+        wan1Rule,
+        wan2Rule,
+        usedFallbackPortWan2,
+      };
     });
   }
 }

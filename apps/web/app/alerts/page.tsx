@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
-import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter, Ban, ShieldAlert, Gauge, Sliders, Lock } from 'lucide-react';
+import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter, Ban, ShieldAlert, Gauge, Sliders, Lock, Globe } from 'lucide-react';
 import { AffectedDeviceList, type AffectedDevice } from '../../components/SecurityFindingDetails';
 
 interface Alert {
@@ -17,6 +17,7 @@ const KINDS = [
   { value: 'new_device', label: 'New devices' },
   { value: 'outage', label: 'Outages' },
   { value: 'reboot', label: 'Reboots' },
+  { value: 'wan_ip_changed', label: 'WAN IP changes' },
   { value: 'security', label: 'Security' },
   { value: 'attack', label: 'Attacks' },
   { value: 'nsfw', label: 'Adult sites' },
@@ -252,6 +253,8 @@ function titleFor(a: Alert, payload: any): string {
       return `Router unreachable`;
     case 'reboot':
       return 'Router rebooted';
+    case 'wan_ip_changed':
+      return `${payload?.wanName || 'WAN'} Public IP changed: ${payload?.previousIp || '?'} -> ${payload?.publicIp || '?'}`;
     case 'security':
       return payload?.message || `Security: ${payload?.rule}`;
     case 'attack':
@@ -273,6 +276,7 @@ function iconFor(kind: string, color: string) {
     case 'new_device': return <Smartphone {...props} />;
     case 'outage': return <WifiOff {...props} />;
     case 'reboot': return <RefreshCw {...props} />;
+    case 'wan_ip_changed': return <Globe {...props} />;
     case 'security': return <Shield {...props} />;
     case 'attack':
     case 'nsfw': return <ShieldAlert {...props} />;

@@ -1,4 +1,6 @@
 import 'server-only';
+import os from 'node:os';
+import net from 'node:net';
 import { db } from './db';
 import { bucket5Min, bucketHour, bucketDay, bucketMonth, HOUR, DAY, MIN } from '@tenda/shared';
 
@@ -49,6 +51,9 @@ export interface NetworkControlSummary {
     wan_type: string | null;
     wan_ip: string | null;
     wan_gateway: string | null;
+    public_ip: string | null;
+    public_ip_checked_at: number | null;
+    public_ip_changed_at: number | null;
     up_flux_bps: number;
     down_flux_bps: number;
     pinned_device_count: number;
@@ -63,6 +68,15 @@ export interface NetworkControlSummary {
     download_limit_kbs: number;
     upload_limit_kbs: number;
     quarantined_count: number;
+  };
+  ssh_access: {
+    enabled: boolean;
+    target_ip: string;
+    external_port: number;
+    ssh_user: string;
+    wan1_active: boolean;
+    wan2_active: boolean;
+    wan2_internal_port: number | null;
   };
 }
 
@@ -168,6 +182,35 @@ export function getLatestDevices(): DeviceRow[] {
   }));
 }
 
+function detectDefaultLanIp(): string {
+  const routerHost = (process.env.ROUTER_HOST ?? '').trim();
+  const prefix = net.isIPv4(routerHost) ? routerHost.split('.').slice(0, 3).join('.') + '.' : null;
+  const nets = os.networkInterfaces();
+  const candidates: string[] = [];
+  for (const entries of Object.values(nets)) {
+    if (!entries) continue;
+    for (const addr of entries) {
+      if (addr.internal || addr.family !== 'IPv4') continue;
+      const [a, b] = addr.address.split('.').map(Number);
+      const isPrivate = a === 10 || (a === 192 && b === 168) || (a === 172 && b !== undefined && b >= 16 && b <= 31);
+      if (!isPrivate) continue;
+      if (prefix && addr.address.startsWith(prefix)) return addr.address;
+      candidates.push(addr.address);
+    }
+  }
+  return candidates[0] ?? '';
+}
+
+function detectDefaultSshUser(): string {
+  try {
+    const u = os.userInfo().username.trim();
+    if (/^[a-zA-Z0-9._-]{1,64}$/.test(u)) return u;
+  } catch {
+    // ignore
+  }
+  return 'admin';
+}
+
 export function getNetworkControlSummary(): NetworkControlSummary {
   const conn = db();
   const kvRows = conn.prepare(`
@@ -178,13 +221,18 @@ export function getNetworkControlSummary(): NetworkControlSummary {
       'router.auto_qos_new_devices.enabled',
       'router.auto_qos_new_devices.auto_reserve',
       'router.auto_qos_new_devices.download_kbs',
-      'router.auto_qos_new_devices.upload_kbs'
+      'router.auto_qos_new_devices.upload_kbs',
+      'router.ssh_access.enabled',
+      'router.ssh_access.target_ip',
+      'router.ssh_access.external_port',
+      'router.ssh_access.ssh_user'
     )
   `).all() as Array<{ key: string; value: string }>;
   const kvMap = new Map(kvRows.map((r) => [r.key, r.value]));
 
   const ports = conn.prepare(`
     SELECT p.wan_id, p.wan_name, p.status, p.wan_type, p.wan_ip, p.wan_gateway,
+           p.public_ip, p.public_ip_checked_at, p.public_ip_changed_at,
            p.up_flux_bps, p.down_flux_bps, p.updated_at,
            (
              SELECT COUNT(*) FROM router_wan_bindings wb
@@ -211,12 +259,60 @@ export function getNetworkControlSummary(): NetworkControlSummary {
   const rawAutoUl = kvMap.get('router.auto_qos_new_devices.upload_kbs');
   const autoUl = rawAutoUl === undefined ? 64 : Math.max(0, Math.round(Number(rawAutoUl) || 0));
 
+  const rawSshEn = kvMap.get('router.ssh_access.enabled');
+  const sshEnabled = rawSshEn === '1' || rawSshEn === 'true';
+  const rawSshIp = (kvMap.get('router.ssh_access.target_ip') ?? '').trim();
+  const sshTargetIp = net.isIPv4(rawSshIp) ? rawSshIp : detectDefaultLanIp();
+  const rawSshPort = Number(kvMap.get('router.ssh_access.external_port'));
+  const sshExternalPort =
+    Number.isInteger(rawSshPort) && (rawSshPort === 22 || (rawSshPort >= 1024 && rawSshPort <= 65535))
+      ? rawSshPort
+      : 22222;
+  const rawSshUser = (kvMap.get('router.ssh_access.ssh_user') ?? '').trim();
+  const sshUser = /^[a-zA-Z0-9._-]{1,64}$/.test(rawSshUser) ? rawSshUser : detectDefaultSshUser();
+
+  let wan1Active = false;
+  let wan2Active = false;
+  let wan2InternalPort: number | null = null;
+  try {
+    if (sshTargetIp) {
+      const pmRows = conn.prepare(`
+        SELECT wan_id, internal_port, external_port, enabled
+        FROM router_port_mappings
+        WHERE server_ip = ? AND external_port = ? AND enabled = 1
+      `).all(sshTargetIp, sshExternalPort) as Array<{
+        wan_id: number;
+        internal_port: number;
+        external_port: number;
+        enabled: number;
+      }>;
+      for (const pm of pmRows) {
+        if (Number(pm.wan_id) === 1) wan1Active = true;
+        if (Number(pm.wan_id) === 2) {
+          wan2Active = true;
+          wan2InternalPort = Number(pm.internal_port);
+        }
+      }
+    }
+  } catch {
+    // Table may not exist yet before migration 025 runs
+  }
+
   return {
     qos_policy: Number(kvMap.get('router.qos_policy') ?? 2),
     wan_route_policy: kvMap.get('router.wan_route_policy') ?? 'custom',
     wan_ports: ports.map((p) => ({
       ...p,
       wan_id: Number(p.wan_id),
+      public_ip: p.public_ip ?? null,
+      public_ip_checked_at:
+        p.public_ip_checked_at === null || p.public_ip_checked_at === undefined
+          ? null
+          : Number(p.public_ip_checked_at),
+      public_ip_changed_at:
+        p.public_ip_changed_at === null || p.public_ip_changed_at === undefined
+          ? null
+          : Number(p.public_ip_changed_at),
       up_flux_bps: Number(p.up_flux_bps ?? 0),
       down_flux_bps: Number(p.down_flux_bps ?? 0),
       pinned_device_count: Number(p.pinned_device_count ?? 0),
@@ -231,6 +327,15 @@ export function getNetworkControlSummary(): NetworkControlSummary {
       download_limit_kbs: autoDl,
       upload_limit_kbs: autoUl,
       quarantined_count: Number(counts?.quarantined_count ?? 0),
+    },
+    ssh_access: {
+      enabled: sshEnabled,
+      target_ip: sshTargetIp,
+      external_port: sshExternalPort,
+      ssh_user: sshUser,
+      wan1_active: wan1Active,
+      wan2_active: wan2Active,
+      wan2_internal_port: wan2InternalPort,
     },
   };
 }

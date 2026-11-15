@@ -100,7 +100,7 @@ export interface Outage {
   notes: string | null;
 }
 
-export type AlertKind = 'new_device' | 'outage' | 'reboot';
+export type AlertKind = 'new_device' | 'outage' | 'reboot' | 'wan_ip_changed';
 
 export interface Alert {
   id: number;
@@ -127,6 +127,32 @@ export interface RouterWanPortState {
   wanGateway: string | null;
   upFluxBps: number;
   downFluxBps: number;
+  publicIp?: string | null;
+  publicIpCheckedAt?: number | null;
+  publicIpChangedAt?: number | null;
+}
+
+export interface RouterPortMappingRule {
+  id: number;
+  /** 1-based WAN ID (`1` = WAN1, `2` = WAN2). */
+  wanId: number;
+  serverIp: string;
+  internalPort: number;
+  externalPort: number;
+  /** Tenda W30E: `0` = TCP+UDP, `1` = TCP, `2` = UDP. */
+  protocol: number;
+  enabled: boolean;
+}
+
+export interface SshExternalAccessState {
+  enabled: boolean;
+  targetIp: string;
+  externalPort: number;
+  sshUser: string;
+  wan1Active: boolean;
+  wan2Active: boolean;
+  wan2InternalPort: number | null;
+  dmzDisabled: boolean;
 }
 
 export interface RouterWanIpBinding {

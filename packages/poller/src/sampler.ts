@@ -18,6 +18,14 @@ import {
   syncTrafficControlToDb,
   type AutoQosAppliedOutcome,
 } from './traffic-control.js';
+import {
+  FALLBACK_SSH_WAN2_INTERNAL_PORT,
+  SshLocalRelay,
+  getSshAccessConfig,
+  isLocalIpv4,
+  probeWanPublicIps,
+  syncPortMappingsToDb,
+} from './wan-public-ip.js';
 
 export interface RouterTelemetry {
   ts: number;
@@ -41,6 +49,7 @@ export class Sampler {
   private thresholds: ThresholdAlertMonitor;
   private telemetry: RouterTelemetry | null = null;
   private reservedMacs = new Set<string>();
+  private sshRelay = new SshLocalRelay();
 
   private insertRouterState: Database.Statement;
   private upsertReservation: Database.Statement;
@@ -105,10 +114,14 @@ export class Sampler {
     // the security scanner needs them fresh to silence findings for reserved
     // MACs (random or otherwise).
     this.refreshReservations().catch((e) => log.warn('initial reservations refresh failed', String(e)));
-    this.refreshTrafficControls().catch((e) => log.warn('initial traffic-controls refresh failed', String(e)));
+    this.refreshTrafficControls()
+      .then(() => this.refreshWanPublicIpsAndSsh())
+      .catch((e) => log.warn('initial traffic-controls/public-ip refresh failed', String(e)));
     this.reservationTimer = setInterval(() => {
       this.refreshReservations().catch((e) => log.warn('reservations refresh failed', String(e)));
-      this.refreshTrafficControls().catch((e) => log.warn('traffic-controls refresh failed', String(e)));
+      this.refreshTrafficControls()
+        .then(() => this.refreshWanPublicIpsAndSsh())
+        .catch((e) => log.warn('traffic-controls/public-ip refresh failed', String(e)));
     }, MIN);
   }
 
@@ -117,6 +130,7 @@ export class Sampler {
     if (this.reservationTimer) { clearInterval(this.reservationTimer); this.reservationTimer = null; }
     if (this.rollupTimer) { clearInterval(this.rollupTimer); this.rollupTimer = null; }
     if (this.logPullTimer) { clearInterval(this.logPullTimer); this.logPullTimer = null; }
+    void this.sshRelay.stop().catch(() => {});
   }
 
   isRunning(): boolean {
@@ -133,6 +147,61 @@ export class Sampler {
     syncTrafficControlToDb(this.db, state, now);
     this.ipc.broadcast({ type: 'samples-updated', ts: now, deviceCount: state.qosDevices.length });
     return state;
+  }
+
+  async refreshWanPublicIpsAndSsh(): Promise<Map<number, string | null>> {
+    const now = Date.now();
+    try {
+      let mappings = await this.router.getPortMappings();
+      const sshCfg = getSshAccessConfig(this.db, this.router.getHost());
+      if (sshCfg.enabled && sshCfg.targetIp) {
+        const hasWan1 = mappings.some(
+          (m) => m.wanId === 1 && m.serverIp === sshCfg.targetIp && m.externalPort === sshCfg.externalPort && m.enabled,
+        );
+        const hasWan2 = mappings.some(
+          (m) => m.wanId === 2 && m.serverIp === sshCfg.targetIp && m.externalPort === sshCfg.externalPort && m.enabled,
+        );
+        if (!hasWan1 || !hasWan2) {
+          await this.router.configureSshPortMapping({
+            enabled: true,
+            targetIp: sshCfg.targetIp,
+            externalPort: sshCfg.externalPort,
+          });
+          mappings = await this.router.getPortMappings();
+        }
+      }
+      syncPortMappingsToDb(this.db, mappings, now);
+      await this.reconcileSshRelay(mappings);
+    } catch (e) {
+      log.debug('port-mapping sync skipped', String(e));
+    }
+
+    const ips = await probeWanPublicIps(this.db, this.router, { now });
+    this.ipc.broadcast({ type: 'samples-updated', ts: Date.now(), deviceCount: ips.size });
+    return ips;
+  }
+
+  async reconcileSshRelay(mappings?: Awaited<ReturnType<RouterClient['getPortMappings']>>): Promise<void> {
+    const sshCfg = getSshAccessConfig(this.db, this.router.getHost());
+    const list = mappings ?? (await this.router.getPortMappings());
+    const needsFallbackRelay =
+      sshCfg.enabled &&
+      Boolean(sshCfg.targetIp) &&
+      isLocalIpv4(sshCfg.targetIp) &&
+      list.some(
+        (m) =>
+          m.enabled &&
+          m.serverIp === sshCfg.targetIp &&
+          m.internalPort === FALLBACK_SSH_WAN2_INTERNAL_PORT,
+      );
+
+    if (needsFallbackRelay) {
+      if (!this.sshRelay.isRunning()) {
+        await this.sshRelay.start();
+      }
+    } else if (this.sshRelay.isRunning()) {
+      await this.sshRelay.stop();
+    }
   }
 
   async refreshDhcpReservations(): Promise<void> {

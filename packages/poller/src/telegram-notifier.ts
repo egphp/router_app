@@ -21,7 +21,7 @@ export class TelegramNotifier {
     this.findStmt = db.prepare(`
       SELECT id, kind, mac, payload, created_at FROM alerts
       WHERE id > ? AND dismissed_at IS NULL
-        AND (kind IN ('outage', 'reboot', 'attack')
+        AND (kind IN ('outage', 'reboot', 'attack', 'wan_ip_changed')
              OR (kind = 'security' AND json_extract(payload, '$.severity') IN ('warn', 'critical'))
              OR (kind = 'new_device'))
       ORDER BY id ASC LIMIT 20
@@ -72,6 +72,12 @@ export class TelegramNotifier {
         return `🛡 *Security alert* (${p?.severity})\n${p?.message}\nMAC: \`${r.mac}\`\n_${when}_`;
       case 'attack':
         return `🚨 *Attack detected*\nKind: ${p?.kind}\nCount: ${p?.count}\nFrom: ${p?.ip} / \`${r.mac}\`\n_${when}_`;
+      case 'wan_ip_changed': {
+        const sshLine = p?.sshEnabled && p?.publicIp && p?.sshPort
+          ? `\n🔑 SSH: \`ssh -p ${p.sshPort} ${p?.sshUser || 'michaeltawfik'}@${p.publicIp}\``
+          : '';
+        return `🌐 *${p?.wanName || 'WAN'} Public IP Changed*\nPrevious: \`${p?.previousIp || '?'}\`\nNew IP: \`${p?.publicIp || '?'}\`${sshLine}\n_${when}_`;
+      }
       default:
         return `[${r.kind}] ${p?.message || ''}\n_${when}_`;
     }

@@ -39,6 +39,8 @@ process.env.TENDA_SHARED_PASSKEY_FILE = sharedPasskeyPath;
 let mockControlPort = 0;
 let lastControlPayload: Record<string, unknown> | null = null;
 let lastAutoQosPayload: Record<string, unknown> | null = null;
+let lastSshAccessPayload: Record<string, unknown> | null = null;
+let refreshPublicIpsCount = 0;
 let mockServer: http.Server;
 
 const serverReady = new Promise<void>((resolve) => {
@@ -46,6 +48,39 @@ const serverReady = new Promise<void>((resolve) => {
     if (req.method === 'GET' && req.url === '/device-control') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/wan-public-ip/refresh') {
+      refreshPublicIpsCount++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, publicIps: { 1: '156.196.235.143', 2: '156.196.19.204' } }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/ssh-access') {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        lastSshAccessPayload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const db = getDb();
+        const now = Date.now();
+        const enabled = Boolean(lastSshAccessPayload?.enabled);
+        const targetIp = String(lastSshAccessPayload?.targetIp ?? '192.168.0.7');
+        const extPort = Number(lastSshAccessPayload?.externalPort ?? 22222);
+        const sshUser = String(lastSshAccessPayload?.sshUser ?? 'michaeltawfik');
+        db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`).run('router.ssh_access.enabled', enabled ? '1' : '0');
+        db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`).run('router.ssh_access.target_ip', targetIp);
+        db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`).run('router.ssh_access.external_port', String(extPort));
+        db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`).run('router.ssh_access.ssh_user', sshUser);
+        db.prepare(`DELETE FROM router_port_mappings`).run();
+        if (enabled) {
+          db.prepare(`
+            INSERT INTO router_port_mappings (id, wan_id, server_ip, internal_port, external_port, protocol, enabled, updated_at)
+            VALUES (1, 1, ?, 22, ?, 1, 1, ?), (2, 2, ?, 22, ?, 1, 1, ?)
+          `).run(targetIp, extPort, now, targetIp, extPort, now);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, sshAccess: { enabled, targetIp, externalPort: extPort, sshUser } }));
+      });
       return;
     }
     if (req.method === 'POST' && req.url === '/auto-qos-policy') {
@@ -138,11 +173,11 @@ before(() => {
   `).run(now, now, now);
 
   db.prepare(`
-    INSERT INTO router_wan_ports (wan_id, wan_name, status, wan_type, wan_ip, wan_gateway, up_flux_bps, down_flux_bps, updated_at)
+    INSERT INTO router_wan_ports (wan_id, wan_name, status, wan_type, wan_ip, wan_gateway, up_flux_bps, down_flux_bps, public_ip, public_ip_checked_at, public_ip_changed_at, updated_at)
     VALUES
-      (1, 'WAN1', 'wired', 'dhcp', '192.168.3.13', '192.168.3.1', 12000, 350000, ?),
-      (2, 'WAN2', 'wired', 'dhcp', '192.168.2.17', '192.168.2.1', 8000, 190000, ?)
-  `).run(now, now);
+      (1, 'WAN1', 'wired', 'dhcp', '192.168.3.13', '192.168.3.1', 12000, 350000, '156.196.235.143', ?, ?, ?),
+      (2, 'WAN2', 'wired', 'dhcp', '192.168.2.17', '192.168.2.1', 8000, 190000, '156.196.19.204', ?, ?, ?)
+  `).run(now, now, now, now, now, now);
 
   db.prepare(`
     INSERT INTO router_wan_bindings (ip, wan_port, rule_id, rule_enabled, ip_group_id, ip_group_name, start_ip, end_ip, inherited_from_range, updated_at)
@@ -356,5 +391,41 @@ describe('/api/devices/[mac]/control & /api/network-control routes', () => {
     const netJson = await netResp.json();
     assert.equal(netJson.ok, true);
     assert.equal(netJson.wan_ports.length, 2);
+    assert.equal(netJson.wan_ports[0]?.public_ip, '156.196.235.143');
+    assert.equal(netJson.wan_ports[1]?.public_ip, '156.196.19.204');
+
+    // Reject invalid SSH port (< 1024 and !== 22, e.g. port 80)
+    const badSshPort = makeAuthedRequest('/api/network-control', 'POST', {
+      ssh_access: { enabled: true, target_ip: '192.168.0.7', external_port: 80 },
+    });
+    const badSshResp = await postNetworkControlRoute(badSshPort);
+    assert.equal(badSshResp.status, 400);
+
+    // Enable Dual-WAN SSH port mapping via /api/network-control
+    const sshReq = makeAuthedRequest('/api/network-control', 'POST', {
+      ssh_access: { enabled: true, target_ip: '192.168.0.7', external_port: 22222, ssh_user: 'michaeltawfik' },
+    });
+    const sshResp = await postNetworkControlRoute(sshReq);
+    assert.equal(sshResp.status, 200);
+    const sshJson = await sshResp.json();
+    assert.equal(sshJson.ssh_access.enabled, true);
+    assert.equal(sshJson.ssh_access.target_ip, '192.168.0.7');
+    assert.equal(sshJson.ssh_access.external_port, 22222);
+    assert.equal(sshJson.ssh_access.wan1_active, true);
+    assert.equal(sshJson.ssh_access.wan2_active, true);
+    assert.deepEqual(lastSshAccessPayload, {
+      enabled: true,
+      targetIp: '192.168.0.7',
+      externalPort: 22222,
+      sshUser: 'michaeltawfik',
+    });
+
+    // Trigger explicit public-IP refresh action
+    const refreshReq = makeAuthedRequest('/api/network-control', 'POST', {
+      action: 'refresh_public_ips',
+    });
+    const refreshResp = await postNetworkControlRoute(refreshReq);
+    assert.equal(refreshResp.status, 200);
+    assert.equal(refreshPublicIpsCount, 1);
   });
 });

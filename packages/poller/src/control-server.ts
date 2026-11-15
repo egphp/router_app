@@ -8,9 +8,17 @@ import type { Sampler } from './sampler.js';
 import { log } from './logger.js';
 import {
   getNewDeviceAutoQosConfig,
+  isValidLanIpv4,
   markDeviceAutoQosReviewed,
   setNewDeviceAutoQosConfig,
 } from './traffic-control.js';
+import {
+  getSshAccessConfig,
+  isValidExternalSshPort,
+  probeWanPublicIps,
+  setSshAccessConfig,
+  syncPortMappingsToDb,
+} from './wan-public-ip.js';
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -31,8 +39,10 @@ export function startControlServer(
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('X-Content-Type-Options', 'nosniff');
 
-    // Block cross-origin browser requests (Private Network Access / CSRF protection)
-    if (req.headers.origin || req.headers['sec-fetch-mode']) {
+    // Block cross-origin browser requests (Private Network Access / CSRF protection).
+    // Note: Node 24 undici fetch sets `sec-fetch-mode: cors` on server-to-server calls without `origin` or `sec-fetch-site`,
+    // whereas browsers always send `origin` and/or `sec-fetch-site`.
+    if (req.headers.origin || req.headers['sec-fetch-site']) {
       res.statusCode = 403;
       res.end(JSON.stringify({ ok: false, error: 'browser cross-origin access denied' }));
       return;
@@ -105,8 +115,77 @@ export function startControlServer(
         const state = sampler
           ? await sampler.refreshTrafficControls()
           : await router.getTrafficControlState();
+        if (sampler) {
+          await sampler.refreshWanPublicIpsAndSsh().catch((e) => log.debug('refreshWanPublicIpsAndSsh failed', String(e)));
+        } else if (db) {
+          await probeWanPublicIps(db, router).catch((e) => log.debug('probeWanPublicIps failed', String(e)));
+        }
         const autoQos = db ? getNewDeviceAutoQosConfig(db) : null;
-        res.end(JSON.stringify({ ok: true, state, autoQos }));
+        const sshAccess = db ? getSshAccessConfig(db, router.getHost()) : null;
+        res.end(JSON.stringify({ ok: true, state, autoQos, sshAccess }));
+        return;
+      }
+      if (req.url === '/wan-public-ip/refresh' && req.method === 'POST') {
+        if (!db) {
+          res.statusCode = 503;
+          res.end(JSON.stringify({ ok: false, error: 'Database handle unavailable' }));
+          return;
+        }
+        const ips = sampler
+          ? await sampler.refreshWanPublicIpsAndSsh()
+          : await probeWanPublicIps(db, router);
+        res.end(JSON.stringify({ ok: true, publicIps: Object.fromEntries(ips.entries()) }));
+        return;
+      }
+      if (req.url === '/ssh-access' && req.method === 'POST') {
+        if (!db) {
+          res.statusCode = 503;
+          res.end(JSON.stringify({ ok: false, error: 'Database handle unavailable' }));
+          return;
+        }
+        const body = await readJson(req);
+        const current = getSshAccessConfig(db, router.getHost());
+        const enabled = body.enabled !== undefined ? Boolean(body.enabled) : current.enabled;
+        const targetIp =
+          typeof body.targetIp === 'string' && body.targetIp.trim()
+            ? body.targetIp.trim()
+            : current.targetIp;
+        const externalPort =
+          body.externalPort !== undefined ? Number(body.externalPort) : current.externalPort;
+        const sshUser =
+          typeof body.sshUser === 'string' && body.sshUser.trim()
+            ? body.sshUser.trim()
+            : current.sshUser;
+
+        if (!isValidLanIpv4(targetIp)) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, code: 'INVALID_LAN_IP', error: 'A valid private LAN IPv4 address is required.' }));
+          return;
+        }
+        if (!isValidExternalSshPort(externalPort)) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, code: 'INVALID_SSH_PORT', error: 'External SSH port must be 22 or between 1024 and 65535.' }));
+          return;
+        }
+
+        const applied = await router.configureSshPortMapping({
+          enabled,
+          targetIp,
+          externalPort,
+        });
+        if (!applied.ok) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, code: applied.code, error: applied.error }));
+          return;
+        }
+
+        const sshAccess = setSshAccessConfig(db, { enabled, targetIp, externalPort, sshUser }, router.getHost());
+        const mappings = await router.getPortMappings();
+        syncPortMappingsToDb(db, mappings);
+        if (sampler) {
+          await sampler.reconcileSshRelay(mappings);
+        }
+        res.end(JSON.stringify({ ok: true, sshAccess, applied }));
         return;
       }
       if (req.url === '/auto-qos-policy' && req.method === 'POST') {
