@@ -141,8 +141,8 @@ export function detectLocalLanIpv4(routerHost?: string): string | null {
     if (!entries) continue;
     for (const addr of entries) {
       if (addr.internal || addr.family !== 'IPv4') continue;
-      // Skip /32 secondary VIP aliases (e.g. .241/.242 symmetric SSH VIPs) when detecting primary LAN IP
-      if (addr.netmask === '255.255.255.255') continue;
+      // Skip /32 secondary VIP aliases (.241/.242 symmetric SSH VIPs) when detecting primary LAN IP
+      if (addr.netmask === '255.255.255.255' || addr.address.endsWith('.241') || addr.address.endsWith('.242')) continue;
       if (!isValidLanIpv4(addr.address)) continue;
       if (prefix && addr.address.startsWith(prefix)) {
         return addr.address;

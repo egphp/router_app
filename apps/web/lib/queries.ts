@@ -191,7 +191,7 @@ function detectDefaultLanIp(): string {
     if (!entries) continue;
     for (const addr of entries) {
       if (addr.internal || addr.family !== 'IPv4') continue;
-      if (addr.netmask === '255.255.255.255') continue;
+      if (addr.netmask === '255.255.255.255' || addr.address.endsWith('.241') || addr.address.endsWith('.242')) continue;
       const [a, b] = addr.address.split('.').map(Number);
       const isPrivate = a === 10 || (a === 192 && b === 168) || (a === 172 && b !== undefined && b >= 16 && b <= 31);
       if (!isPrivate) continue;

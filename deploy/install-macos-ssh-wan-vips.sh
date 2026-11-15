@@ -40,10 +40,10 @@ fi
 
 CHANGED=0
 if ! echo "\${CUR}" | /usr/bin/grep -q "inet \${VIP1} "; then
-  /sbin/ifconfig "\${IFACE}" alias "\${VIP1}" 255.255.255.255 && CHANGED=1
+  /sbin/ifconfig "\${IFACE}" alias "\${VIP1}" netmask 255.255.255.255 && CHANGED=1
 fi
 if ! echo "\${CUR}" | /usr/bin/grep -q "inet \${VIP2} "; then
-  /sbin/ifconfig "\${IFACE}" alias "\${VIP2}" 255.255.255.255 && CHANGED=1
+  /sbin/ifconfig "\${IFACE}" alias "\${VIP2}" netmask 255.255.255.255 && CHANGED=1
 fi
 
 if [[ "\${CHANGED}" -eq 1 ]]; then
