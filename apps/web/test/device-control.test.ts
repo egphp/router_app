@@ -173,11 +173,16 @@ before(() => {
   `).run(now, now, now);
 
   db.prepare(`
-    INSERT INTO router_wan_ports (wan_id, wan_name, status, wan_type, wan_ip, wan_gateway, up_flux_bps, down_flux_bps, public_ip, public_ip_checked_at, public_ip_changed_at, updated_at)
+    INSERT INTO router_wan_ports (
+      wan_id, wan_name, status, wan_type, wan_ip, wan_gateway, up_flux_bps, down_flux_bps,
+      public_ip, public_ip_checked_at, public_ip_changed_at,
+      ddns_fqdn, ddns_synced_ip, ddns_synced_at, ddns_last_error,
+      updated_at
+    )
     VALUES
-      (1, 'WAN1', 'wired', 'dhcp', '192.168.3.13', '192.168.3.1', 12000, 350000, '156.196.235.143', ?, ?, ?),
-      (2, 'WAN2', 'wired', 'dhcp', '192.168.2.17', '192.168.2.1', 8000, 190000, '156.196.19.204', ?, ?, ?)
-  `).run(now, now, now, now, now, now);
+      (1, 'WAN1', 'wired', 'dhcp', '192.168.3.13', '192.168.3.1', 12000, 350000, '156.196.235.143', ?, ?, 'w1-testslug.example.net', '156.196.235.143', ?, NULL, ?),
+      (2, 'WAN2', 'wired', 'dhcp', '192.168.2.17', '192.168.2.1', 8000, 190000, '156.196.19.204', ?, ?, 'w2-testslug.example.net', '156.196.19.204', ?, NULL, ?)
+  `).run(now, now, now, now, now, now, now, now);
 
   db.prepare(`
     INSERT INTO router_wan_bindings (ip, wan_port, rule_id, rule_enabled, ip_group_id, ip_group_name, start_ip, end_ip, inherited_from_range, updated_at)
@@ -385,6 +390,13 @@ describe('/api/devices/[mac]/control & /api/network-control routes', () => {
       uploadLimitKBs: 64,
     });
 
+    const unauthNet = new Request('https://tv-eg.com:2055/api/network-control', {
+      method: 'GET',
+      headers: { host: 'tv-eg.com:2055', origin: 'https://tv-eg.com:2055' },
+    });
+    const unauthNetResp = await getNetworkControlRoute(unauthNet);
+    assert.equal(unauthNetResp.status, 401);
+
     const netReq = makeAuthedRequest('/api/network-control?refresh=1', 'GET');
     const netResp = await getNetworkControlRoute(netReq);
     assert.equal(netResp.status, 200);
@@ -392,7 +404,12 @@ describe('/api/devices/[mac]/control & /api/network-control routes', () => {
     assert.equal(netJson.ok, true);
     assert.equal(netJson.wan_ports.length, 2);
     assert.equal(netJson.wan_ports[0]?.public_ip, '156.196.235.143');
+    assert.equal(netJson.wan_ports[0]?.ddns_fqdn, 'w1-testslug.example.net');
+    assert.equal(netJson.wan_ports[0]?.ddns_synced_ip, '156.196.235.143');
+    assert.equal(netJson.wan_ports[0]?.ddns_last_error, null);
     assert.equal(netJson.wan_ports[1]?.public_ip, '156.196.19.204');
+    assert.equal(netJson.wan_ports[1]?.ddns_fqdn, 'w2-testslug.example.net');
+    assert.equal(netJson.wan_ports[1]?.ddns_synced_ip, '156.196.19.204');
 
     // Reject invalid SSH port (< 1024 and !== 22, e.g. port 80)
     const badSshPort = makeAuthedRequest('/api/network-control', 'POST', {

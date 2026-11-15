@@ -54,6 +54,10 @@ export interface NetworkControlSummary {
     public_ip: string | null;
     public_ip_checked_at: number | null;
     public_ip_changed_at: number | null;
+    ddns_fqdn: string | null;
+    ddns_synced_ip: string | null;
+    ddns_synced_at: number | null;
+    ddns_last_error: string | null;
     up_flux_bps: number;
     down_flux_bps: number;
     pinned_device_count: number;
@@ -234,6 +238,7 @@ export function getNetworkControlSummary(): NetworkControlSummary {
   const ports = conn.prepare(`
     SELECT p.wan_id, p.wan_name, p.status, p.wan_type, p.wan_ip, p.wan_gateway,
            p.public_ip, p.public_ip_checked_at, p.public_ip_changed_at,
+           p.ddns_fqdn, p.ddns_synced_ip, p.ddns_synced_at, p.ddns_last_error,
            p.up_flux_bps, p.down_flux_bps, p.updated_at,
            (
              SELECT COUNT(*) FROM router_wan_bindings wb
@@ -317,6 +322,13 @@ export function getNetworkControlSummary(): NetworkControlSummary {
         p.public_ip_changed_at === null || p.public_ip_changed_at === undefined
           ? null
           : Number(p.public_ip_changed_at),
+      ddns_fqdn: p.ddns_fqdn ?? null,
+      ddns_synced_ip: p.ddns_synced_ip ?? null,
+      ddns_synced_at:
+        p.ddns_synced_at === null || p.ddns_synced_at === undefined
+          ? null
+          : Number(p.ddns_synced_at),
+      ddns_last_error: p.ddns_last_error ?? null,
       up_flux_bps: Number(p.up_flux_bps ?? 0),
       down_flux_bps: Number(p.down_flux_bps ?? 0),
       pinned_device_count: Number(p.pinned_device_count ?? 0),

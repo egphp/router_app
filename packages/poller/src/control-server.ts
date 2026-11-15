@@ -133,8 +133,8 @@ export function startControlServer(
           return;
         }
         const ips = sampler
-          ? await sampler.refreshWanPublicIpsAndSsh()
-          : await probeWanPublicIps(db, router);
+          ? await sampler.refreshWanPublicIpsAndSsh({ forceDdnsSync: true })
+          : await probeWanPublicIps(db, router, { forceDdnsSync: true });
         res.end(JSON.stringify({ ok: true, publicIps: Object.fromEntries(ips.entries()) }));
         return;
       }

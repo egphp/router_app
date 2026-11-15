@@ -1,7 +1,9 @@
 import dns from 'node:dns';
+import fs from 'node:fs';
 import https from 'node:https';
 import net from 'node:net';
 import os from 'node:os';
+import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type { RouterPortMappingRule } from '@tenda/shared';
 import type { RouterClient } from './router-client.js';
@@ -21,6 +23,85 @@ export const WAN2_PROBE_ENDPOINTS = {
 export const DEFAULT_SSH_EXTERNAL_PORT = 22222;
 export const DEFAULT_SSH_INTERNAL_PORT = 22;
 export const FALLBACK_SSH_WAN2_INTERNAL_PORT = 2222;
+export const DEFAULT_DDNS_REVERIFY_MS = 15 * 60 * 1000;
+
+export interface CloudflareDdnsConfig {
+  enabled: boolean;
+  apiToken: string;
+  zoneId: string;
+  wan1Fqdn: string;
+  wan2Fqdn: string;
+}
+
+export interface CloudflareDdnsWanOutcome {
+  fqdn: string;
+  ok: boolean;
+  skipped: boolean;
+  error?: string;
+}
+
+const VALID_FQDN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const VALID_ZONE_ID_RE = /^[a-zA-Z0-9_-]{4,64}$/;
+
+export function normalizeDdnsFqdn(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const cleaned = raw.trim().replace(/\.+$/, '').toLowerCase();
+  if (!cleaned || cleaned.length > 253) return '';
+  return VALID_FQDN_RE.test(cleaned) ? cleaned : '';
+}
+
+export function defaultCloudflareDdnsFilePath(): string {
+  return path.join(os.homedir(), '.config', 'egphp-owner', 'tenda-cloudflare-ddns.json');
+}
+
+export function loadCloudflareDdnsConfigFromEnv(
+  env: Record<string, string | undefined> = process.env,
+  filePath?: string,
+): CloudflareDdnsConfig {
+  const resolvedFile =
+    filePath !== undefined
+      ? filePath
+      : env.TENDA_CLOUDFLARE_DDNS_FILE || (env === process.env ? defaultCloudflareDdnsFilePath() : '');
+
+  let fileJson: Partial<{
+    apiToken: string;
+    zoneId: string;
+    wan1Fqdn: string;
+    wan2Fqdn: string;
+  }> = {};
+  if (resolvedFile) {
+    try {
+      const raw = fs.readFileSync(resolvedFile, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        fileJson = parsed;
+      }
+    } catch {
+      // File is optional (e.g. absent on PPETO or secondary instances)
+    }
+  }
+
+  const apiToken = (env.CF_API_TOKEN ?? fileJson.apiToken ?? '').trim();
+  const zoneId = (env.CF_ZONE_ID ?? fileJson.zoneId ?? '').trim();
+  const wan1Fqdn = normalizeDdnsFqdn(env.CF_DDNS_WAN1_FQDN ?? fileJson.wan1Fqdn);
+  const wan2Fqdn = normalizeDdnsFqdn(env.CF_DDNS_WAN2_FQDN ?? fileJson.wan2Fqdn);
+  const enabled =
+    apiToken.length > 0 &&
+    VALID_ZONE_ID_RE.test(zoneId) &&
+    (wan1Fqdn.length > 0 || wan2Fqdn.length > 0);
+  return { enabled, apiToken, zoneId, wan1Fqdn, wan2Fqdn };
+}
+
+function redactSecrets(message: string, secrets: string[]): string {
+  let out = message;
+  for (const secret of secrets) {
+    if (secret && secret.length >= 4) {
+      out = out.split(secret).join('[REDACTED]');
+    }
+  }
+  out = out.replace(/Bearer\s+[^\s"']+/gi, 'Bearer [REDACTED]');
+  return out.slice(0, 240);
+}
 
 const KV_SSH_ENABLED = 'router.ssh_access.enabled';
 const KV_SSH_TARGET_IP = 'router.ssh_access.target_ip';
@@ -336,10 +417,190 @@ export function syncPortMappingsToDb(
   txn();
 }
 
+export interface SyncCloudflareWanDnsOptions {
+  now?: number;
+  force?: boolean;
+  reverifyIntervalMs?: number;
+  fetchFn?: typeof fetch;
+}
+
+export async function syncCloudflareWanDns(
+  db: Database.Database,
+  cfg: CloudflareDdnsConfig = loadCloudflareDdnsConfigFromEnv(),
+  opts: SyncCloudflareWanDnsOptions = {},
+): Promise<{ synced: boolean; updated: Map<number, CloudflareDdnsWanOutcome> }> {
+  const updated = new Map<number, CloudflareDdnsWanOutcome>();
+  if (!cfg.enabled || !hasColumn(db, 'router_wan_ports', 'ddns_fqdn')) {
+    return { synced: false, updated };
+  }
+
+  const now = opts.now ?? Date.now();
+  const force = Boolean(opts.force);
+  const reverifyMs = opts.reverifyIntervalMs ?? DEFAULT_DDNS_REVERIFY_MS;
+  const fetchImpl = opts.fetchFn ?? fetch;
+
+  const ports = db
+    .prepare(`
+      SELECT wan_id, wan_name, public_ip, ddns_fqdn, ddns_synced_ip, ddns_synced_at, ddns_last_error
+      FROM router_wan_ports
+      ORDER BY wan_id ASC
+    `)
+    .all() as Array<{
+      wan_id: number;
+      wan_name: string;
+      public_ip: string | null;
+      ddns_fqdn: string | null;
+      ddns_synced_ip: string | null;
+      ddns_synced_at: number | null;
+      ddns_last_error: string | null;
+    }>;
+
+  const markOk = db.prepare(`
+    UPDATE router_wan_ports
+    SET ddns_fqdn = @fqdn,
+        ddns_synced_ip = @ip,
+        ddns_synced_at = @now,
+        ddns_last_error = NULL
+    WHERE wan_id = @wan_id
+  `);
+  const markErr = db.prepare(`
+    UPDATE router_wan_ports
+    SET ddns_fqdn = @fqdn,
+        ddns_last_error = @err
+    WHERE wan_id = @wan_id
+  `);
+
+  await Promise.all(
+    ports.map(async (port) => {
+      const targetFqdn = port.wan_id === 1 ? cfg.wan1Fqdn : port.wan_id === 2 ? cfg.wan2Fqdn : '';
+      if (!targetFqdn) return;
+      if (!isValidPublicIpv4(port.public_ip)) {
+        // Persist configured FQDN visibility even if public IP has not resolved yet
+        if (port.ddns_fqdn !== targetFqdn) {
+          markErr.run({ wan_id: port.wan_id, fqdn: targetFqdn, err: port.ddns_last_error });
+        }
+        return;
+      }
+
+      const publicIp = port.public_ip;
+      const isFresh =
+        !force &&
+        port.ddns_fqdn === targetFqdn &&
+        port.ddns_synced_ip === publicIp &&
+        !port.ddns_last_error &&
+        port.ddns_synced_at !== null &&
+        now - port.ddns_synced_at < reverifyMs;
+
+      if (isFresh) {
+        updated.set(port.wan_id, { fqdn: targetFqdn, ok: true, skipped: true });
+        return;
+      }
+
+      try {
+        const baseUrl = `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(cfg.zoneId)}/dns_records`;
+        const authHeaders = {
+          Authorization: `Bearer ${cfg.apiToken}`,
+          'Content-Type': 'application/json',
+        };
+
+        const listResp = await fetchImpl(
+          `${baseUrl}?type=A&name=${encodeURIComponent(targetFqdn)}`,
+          {
+            method: 'GET',
+            headers: authHeaders,
+            signal: AbortSignal.timeout(8000),
+          },
+        );
+        const listJson = (await listResp.json().catch(() => null)) as {
+          success?: boolean;
+          result?: Array<{ id: string; content: string; ttl: number; proxied: boolean }>;
+          errors?: Array<{ message?: string }>;
+        } | null;
+
+        if (!listResp.ok || !listJson?.success || !Array.isArray(listJson.result)) {
+          const detail = listJson?.errors?.[0]?.message ?? `HTTP ${listResp.status}`;
+          throw new Error(`Cloudflare list failed: ${detail}`);
+        }
+
+        const existing = listJson.result[0];
+        const desiredBody = {
+          type: 'A',
+          name: targetFqdn,
+          content: publicIp,
+          ttl: 60,
+          proxied: false,
+        };
+
+        if (!existing) {
+          const createResp = await fetchImpl(baseUrl, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify(desiredBody),
+            signal: AbortSignal.timeout(8000),
+          });
+          const createJson = (await createResp.json().catch(() => null)) as {
+            success?: boolean;
+            errors?: Array<{ message?: string }>;
+          } | null;
+          if (!createResp.ok || !createJson?.success) {
+            const detail = createJson?.errors?.[0]?.message ?? `HTTP ${createResp.status}`;
+            throw new Error(`Cloudflare create failed: ${detail}`);
+          }
+          log.info('wan-ddns: created DNS-Only A record', {
+            wan: port.wan_name,
+            fqdn: targetFqdn,
+            ip: publicIp,
+          });
+        } else if (
+          existing.content !== publicIp ||
+          existing.proxied !== false ||
+          Number(existing.ttl) !== 60
+        ) {
+          const updateResp = await fetchImpl(`${baseUrl}/${encodeURIComponent(String(existing.id))}`, {
+            method: 'PUT',
+            headers: authHeaders,
+            body: JSON.stringify(desiredBody),
+            signal: AbortSignal.timeout(8000),
+          });
+          const updateJson = (await updateResp.json().catch(() => null)) as {
+            success?: boolean;
+            errors?: Array<{ message?: string }>;
+          } | null;
+          if (!updateResp.ok || !updateJson?.success) {
+            const detail = updateJson?.errors?.[0]?.message ?? `HTTP ${updateResp.status}`;
+            throw new Error(`Cloudflare update failed: ${detail}`);
+          }
+          log.info('wan-ddns: updated DNS-Only A record', {
+            wan: port.wan_name,
+            fqdn: targetFqdn,
+            ip: publicIp,
+          });
+        }
+
+        markOk.run({ wan_id: port.wan_id, fqdn: targetFqdn, ip: publicIp, now });
+        updated.set(port.wan_id, { fqdn: targetFqdn, ok: true, skipped: false });
+      } catch (err) {
+        const safeErr = redactSecrets(err instanceof Error ? err.message : String(err), [
+          cfg.apiToken,
+          cfg.zoneId,
+        ]);
+        markErr.run({ wan_id: port.wan_id, fqdn: targetFqdn, err: safeErr });
+        updated.set(port.wan_id, { fqdn: targetFqdn, ok: false, skipped: false, error: safeErr });
+        log.warn('wan-ddns: sync failed', { wan: port.wan_name, fqdn: targetFqdn, error: safeErr });
+      }
+    }),
+  );
+
+  return { synced: true, updated };
+}
+
 export interface ProbeWanPublicIpsOptions {
   now?: number;
   httpsProbeFn?: (targetIp: string) => Promise<string | null>;
   dnsProbeFn?: (dnsServerIp: string) => Promise<string | null>;
+  ddnsConfig?: CloudflareDdnsConfig;
+  ddnsFetchFn?: typeof fetch;
+  forceDdnsSync?: boolean;
 }
 
 export async function probeWanPublicIps(
@@ -392,6 +653,8 @@ export async function probeWanPublicIps(
         VALUES ('wan_ip_changed', NULL, ?, ?)
       `)
     : null;
+
+  const rotated: Array<{ wanId: number; wanName: string; previousIp: string; publicIp: string }> = [];
 
   await Promise.all(
     ports.map(async (port) => {
@@ -467,21 +730,44 @@ export async function probeWanPublicIps(
           previousIp: port.public_ip,
           publicIp: resolvedIp,
         });
-        insertAlert?.run(
-          JSON.stringify({
-            wanId: port.wan_id,
-            wanName: port.wan_name,
-            previousIp: port.public_ip,
-            publicIp: resolvedIp,
-            sshEnabled: sshCfg.enabled,
-            sshPort: sshCfg.externalPort,
-            sshUser: sshCfg.sshUser,
-          }),
-          now,
-        );
+        rotated.push({
+          wanId: port.wan_id,
+          wanName: port.wan_name,
+          previousIp: port.public_ip,
+          publicIp: resolvedIp,
+        });
       }
     }),
   );
+
+  // Sync Cloudflare DNS-Only A records immediately (no-ops if CF_* env vars are absent)
+  const ddnsResult = await syncCloudflareWanDns(
+    db,
+    opts.ddnsConfig ?? loadCloudflareDdnsConfigFromEnv(),
+    {
+      now,
+      force: opts.forceDdnsSync,
+      fetchFn: opts.ddnsFetchFn,
+    },
+  );
+
+  for (const r of rotated) {
+    const ddns = ddnsResult.updated.get(r.wanId);
+    insertAlert?.run(
+      JSON.stringify({
+        wanId: r.wanId,
+        wanName: r.wanName,
+        previousIp: r.previousIp,
+        publicIp: r.publicIp,
+        ddnsFqdn: ddns?.fqdn ?? undefined,
+        ddnsSynced: ddns ? ddns.ok : undefined,
+        sshEnabled: sshCfg.enabled,
+        sshPort: sshCfg.externalPort,
+        sshUser: sshCfg.sshUser,
+      }),
+      now,
+    );
+  }
 
   return result;
 }

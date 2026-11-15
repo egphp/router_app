@@ -73,10 +73,14 @@ export class TelegramNotifier {
       case 'attack':
         return `🚨 *Attack detected*\nKind: ${p?.kind}\nCount: ${p?.count}\nFrom: ${p?.ip} / \`${r.mac}\`\n_${when}_`;
       case 'wan_ip_changed': {
-        const sshLine = p?.sshEnabled && p?.publicIp && p?.sshPort
-          ? `\n🔑 SSH: \`ssh -p ${p.sshPort} ${p?.sshUser || 'michaeltawfik'}@${p.publicIp}\``
+        const hostTarget = p?.ddnsFqdn || p?.publicIp;
+        const ddnsLine = p?.ddnsFqdn
+          ? `\n🛡 DDNS: \`${p.ddnsFqdn}\`${p?.ddnsSynced ? ' (Synced)' : ''}`
           : '';
-        return `🌐 *${p?.wanName || 'WAN'} Public IP Changed*\nPrevious: \`${p?.previousIp || '?'}\`\nNew IP: \`${p?.publicIp || '?'}\`${sshLine}\n_${when}_`;
+        const sshLine = p?.sshEnabled && hostTarget && p?.sshPort
+          ? `\n🔑 SSH: \`ssh -p ${p.sshPort} ${p?.sshUser || 'michaeltawfik'}@${hostTarget}\``
+          : '';
+        return `🌐 *${p?.wanName || 'WAN'} Public IP Changed*\nPrevious: \`${p?.previousIp || '?'}\`\nNew IP: \`${p?.publicIp || '?'}\`${ddnsLine}${sshLine}\n_${when}_`;
       }
       default:
         return `[${r.kind}] ${p?.message || ''}\n_${when}_`;

@@ -150,7 +150,7 @@ export class Sampler {
     return state;
   }
 
-  async refreshWanPublicIpsAndSsh(): Promise<Map<number, string | null>> {
+  async refreshWanPublicIpsAndSsh(opts?: { forceDdnsSync?: boolean }): Promise<Map<number, string | null>> {
     const now = Date.now();
     try {
       let mappings = await this.router.getPortMappings();
@@ -180,7 +180,7 @@ export class Sampler {
       log.debug('port-mapping sync skipped', String(e));
     }
 
-    const ips = await probeWanPublicIps(this.db, this.router, { now });
+    const ips = await probeWanPublicIps(this.db, this.router, { now, forceDdnsSync: opts?.forceDdnsSync });
     this.ipc.broadcast({ type: 'samples-updated', ts: Date.now(), deviceCount: ips.size });
     return ips;
   }

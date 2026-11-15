@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -14,10 +15,12 @@ import {
   WAN1_PROBE_ENDPOINTS,
   WAN2_PROBE_ENDPOINTS,
   getSshAccessConfig,
+  loadCloudflareDdnsConfigFromEnv,
   parseCloudflareTraceIp,
   probeWanPublicIps,
   resolveSymmetricSshVips,
   setSshAccessConfig,
+  syncCloudflareWanDns,
   syncPortMappingsToDb,
 } from '../src/wan-public-ip.js';
 
@@ -202,6 +205,7 @@ function createTestDb(): Database.Database {
     '001_init.sql',
     '022_router_qos_and_wan_controls.sql',
     '025_wan_public_ip_and_ssh_access.sql',
+    '026_cloudflare_ddns_state.sql',
   ]) {
     const full = path.join(migDir, file);
     if (fs.existsSync(full)) {
@@ -520,4 +524,222 @@ test('resolveSymmetricSshVips & configureSshPortMapping pin SSH_WAN1 (.241) and 
   assert.equal(off.ok, true);
   assert.equal(router.portMappings.every((pm) => pm.portMappingEn === false), true);
   assert.equal(router.wanRouteRules.length, 0);
+});
+
+test('syncCloudflareWanDns & probeWanPublicIps manage DNS-Only A records idempotently, no-op without credentials, and redact tokens on error', async () => {
+  const db = createTestDb();
+  const router = new MockWanSshRouterClient();
+  const t0 = 1_700_100_000_000;
+
+  syncTrafficControlToDb(
+    db,
+    {
+      qosPolicy: 2,
+      wanRoutePolicyType: 'custom',
+      wanPorts: [
+        { wanId: 1, wanName: 'WAN1', status: 'wired', wanType: 'static', wanIp: '192.168.3.13', wanGateway: '192.168.3.1', upFluxBps: 100, downFluxBps: 200 },
+        { wanId: 2, wanName: 'WAN2', status: 'wired', wanType: 'static', wanIp: '192.168.2.17', wanGateway: '192.168.2.1', upFluxBps: 50, downFluxBps: 100 },
+      ],
+      qosDevices: [],
+      wanBindings: [],
+    },
+    t0,
+  );
+  setSshAccessConfig(db, { enabled: true, targetIp: '192.168.0.7', externalPort: 22222, sshUser: 'michaeltawfik' });
+
+  const parsedEnv = loadCloudflareDdnsConfigFromEnv({
+    CF_API_TOKEN: 'cf_secret_test_token_999',
+    CF_ZONE_ID: 'zone_test_123',
+    CF_DDNS_WAN1_FQDN: 'W1-TestSlug.Example.net.',
+    CF_DDNS_WAN2_FQDN: 'w2-testslug.example.net',
+  });
+  assert.equal(parsedEnv.enabled, true);
+  assert.equal(parsedEnv.wan1Fqdn, 'w1-testslug.example.net');
+  assert.equal(parsedEnv.wan2Fqdn, 'w2-testslug.example.net');
+
+  // External private JSON file (~/.config/egphp-owner/tenda-cloudflare-ddns.json) keeps secrets completely outside repo & .env
+  const tmpSecretDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tenda-cf-secret-'));
+  const secretFile = path.join(tmpSecretDir, 'tenda-cloudflare-ddns.json');
+  fs.writeFileSync(
+    secretFile,
+    JSON.stringify({
+      apiToken: 'cf_file_secret_token_888',
+      zoneId: 'zone_file_456',
+      wan1Fqdn: 'w1-fileslug.example.net',
+      wan2Fqdn: 'w2-fileslug.example.net',
+    }),
+    { mode: 0o600 },
+  );
+  try {
+    const fromFile = loadCloudflareDdnsConfigFromEnv({}, secretFile);
+    assert.equal(fromFile.enabled, true);
+    assert.equal(fromFile.apiToken, 'cf_file_secret_token_888');
+    assert.equal(fromFile.zoneId, 'zone_file_456');
+    assert.equal(fromFile.wan1Fqdn, 'w1-fileslug.example.net');
+    assert.equal(fromFile.wan2Fqdn, 'w2-fileslug.example.net');
+  } finally {
+    fs.rmSync(tmpSecretDir, { recursive: true, force: true });
+  }
+
+  // 1) PPETO / unconfigured host safety: empty token/zone + missing file makes zero HTTP calls
+  let cfCalls: Array<{ url: string; method: string; body: any; auth: string | null }> = [];
+  const cfRecords = new Map<string, { id: string; name: string; content: string; ttl: number; proxied: boolean }>();
+  let simulate500 = false;
+
+  const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const headers = new Headers(init?.headers);
+    const auth = headers.get('authorization');
+    const body = typeof init?.body === 'string' && init.body ? JSON.parse(init.body) : null;
+    cfCalls.push({ url, method, body, auth });
+
+    if (simulate500) {
+      return new Response(
+        JSON.stringify({ success: false, errors: [{ message: 'upstream error with token cf_secret_test_token_999 in zone_test_123' }] }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    const parsedUrl = new URL(url);
+    if (method === 'GET' && parsedUrl.pathname.endsWith('/dns_records')) {
+      const name = parsedUrl.searchParams.get('name') ?? '';
+      const rec = cfRecords.get(name);
+      return new Response(JSON.stringify({ success: true, result: rec ? [rec] : [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (method === 'POST' && parsedUrl.pathname.endsWith('/dns_records')) {
+      const created = {
+        id: `rec_${cfRecords.size + 1}`,
+        name: body.name,
+        content: body.content,
+        ttl: body.ttl,
+        proxied: body.proxied,
+      };
+      cfRecords.set(body.name, created);
+      return new Response(JSON.stringify({ success: true, result: created }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (method === 'PUT' && parsedUrl.pathname.includes('/dns_records/')) {
+      const updated = {
+        id: parsedUrl.pathname.split('/').pop()!,
+        name: body.name,
+        content: body.content,
+        ttl: body.ttl,
+        proxied: body.proxied,
+      };
+      cfRecords.set(body.name, updated);
+      return new Response(JSON.stringify({ success: true, result: updated }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    throw new Error(`Unexpected Cloudflare request: ${method} ${url}`);
+  };
+
+  await probeWanPublicIps(db, router, {
+    now: t0 + 1000,
+    httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.235.143' : '156.196.19.204'),
+    dnsProbeFn: async () => null,
+    ddnsConfig: loadCloudflareDdnsConfigFromEnv({}, '/nonexistent/cf-ddns-secret.json'),
+    ddnsFetchFn: mockFetch,
+  });
+  assert.equal(cfCalls.length, 0);
+
+  // 2) Initial Cloudflare creation: creates DNS-Only (proxied: false, ttl: 60) A records for WAN1 & WAN2
+  await probeWanPublicIps(db, router, {
+    now: t0 + 2000,
+    httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.235.143' : '156.196.19.204'),
+    dnsProbeFn: async () => null,
+    ddnsConfig: parsedEnv,
+    ddnsFetchFn: mockFetch,
+  });
+
+  assert.equal(cfRecords.get('w1-testslug.example.net')?.content, '156.196.235.143');
+  assert.equal(cfRecords.get('w1-testslug.example.net')?.proxied, false);
+  assert.equal(cfRecords.get('w1-testslug.example.net')?.ttl, 60);
+  assert.equal(cfRecords.get('w2-testslug.example.net')?.content, '156.196.19.204');
+  assert.equal(cfRecords.get('w2-testslug.example.net')?.proxied, false);
+
+  // Regular syncTrafficControlToDb must preserve ddns_* columns
+  syncTrafficControlToDb(
+    db,
+    {
+      qosPolicy: 2,
+      wanRoutePolicyType: 'custom',
+      wanPorts: [
+        { wanId: 1, wanName: 'WAN1', status: 'wired', wanType: 'static', wanIp: '192.168.3.13', wanGateway: '192.168.3.1', upFluxBps: 500, downFluxBps: 900 },
+        { wanId: 2, wanName: 'WAN2', status: 'wired', wanType: 'static', wanIp: '192.168.2.17', wanGateway: '192.168.2.1', upFluxBps: 300, downFluxBps: 700 },
+      ],
+      qosDevices: [],
+      wanBindings: [],
+    },
+    t0 + 5000,
+  );
+
+  const syncedRows = db
+    .prepare(`SELECT wan_id, ddns_fqdn, ddns_synced_ip, ddns_last_error FROM router_wan_ports ORDER BY wan_id ASC`)
+    .all() as Array<{ wan_id: number; ddns_fqdn: string | null; ddns_synced_ip: string | null; ddns_last_error: string | null }>;
+  assert.deepEqual(syncedRows, [
+    { wan_id: 1, ddns_fqdn: 'w1-testslug.example.net', ddns_synced_ip: '156.196.235.143', ddns_last_error: null },
+    { wan_id: 2, ddns_fqdn: 'w2-testslug.example.net', ddns_synced_ip: '156.196.19.204', ddns_last_error: null },
+  ]);
+
+  // 3) Idempotent next minute: zero Cloudflare API calls when IPs are unchanged within re-verify window
+  cfCalls = [];
+  await probeWanPublicIps(db, router, {
+    now: t0 + 62_000,
+    httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.235.143' : '156.196.19.204'),
+    dnsProbeFn: async () => null,
+    ddnsConfig: parsedEnv,
+    ddnsFetchFn: mockFetch,
+  });
+  assert.equal(cfCalls.length, 0);
+
+  // 4) ISP rotates WAN1 IP -> immediately PUTs new IP (proxied: false, ttl: 60) and emits wan_ip_changed with ddnsFqdn
+  cfCalls = [];
+  await probeWanPublicIps(db, router, {
+    now: t0 + 120_000,
+    httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.250.77' : '156.196.19.204'),
+    dnsProbeFn: async () => null,
+    ddnsConfig: parsedEnv,
+    ddnsFetchFn: mockFetch,
+  });
+  assert.equal(cfRecords.get('w1-testslug.example.net')?.content, '156.196.250.77');
+  assert.equal(cfRecords.get('w1-testslug.example.net')?.proxied, false);
+  assert.equal(cfCalls.some((c) => c.method === 'PUT'), true);
+
+  const alertRow = db
+    .prepare(`SELECT payload, created_at FROM alerts WHERE kind = 'wan_ip_changed' ORDER BY id DESC LIMIT 1`)
+    .get() as { payload: string; created_at: number } | undefined;
+  assert.ok(alertRow);
+  const parsedAlert = JSON.parse(alertRow.payload);
+  assert.equal(parsedAlert.ddnsFqdn, 'w1-testslug.example.net');
+  assert.equal(parsedAlert.ddnsSynced, true);
+
+  const notifier = new TelegramNotifier(db) as any;
+  const tgMsg: string = notifier.formatMessage({
+    kind: 'wan_ip_changed',
+    mac: null,
+    payload: alertRow.payload,
+    created_at: alertRow.created_at,
+  });
+  assert.match(tgMsg, /w1-testslug\.example\.net/);
+  assert.match(tgMsg, /ssh -p 22222 michaeltawfik@w1-testslug\.example\.net/);
+
+  // 5) Transient Cloudflare 500 error: stores redacted error (never leaks CF_API_TOKEN or CF_ZONE_ID)
+  simulate500 = true;
+  await syncCloudflareWanDns(db, parsedEnv, { now: t0 + 180_000, force: true, fetchFn: mockFetch });
+  const errRow = db
+    .prepare(`SELECT ddns_last_error, ddns_synced_ip FROM router_wan_ports WHERE wan_id = 1`)
+    .get() as { ddns_last_error: string | null; ddns_synced_ip: string | null };
+  assert.ok(errRow.ddns_last_error);
+  assert.equal(errRow.ddns_last_error.includes('cf_secret_test_token_999'), false);
+  assert.equal(errRow.ddns_last_error.includes('zone_test_123'), false);
+  // Previous synced IP remains intact during transient error
+  assert.equal(errRow.ddns_synced_ip, '156.196.250.77');
 });

@@ -130,6 +130,10 @@ export interface RouterWanPortState {
   publicIp?: string | null;
   publicIpCheckedAt?: number | null;
   publicIpChangedAt?: number | null;
+  ddnsFqdn?: string | null;
+  ddnsSyncedIp?: string | null;
+  ddnsSyncedAt?: number | null;
+  ddnsLastError?: string | null;
 }
 
 export interface RouterPortMappingRule {

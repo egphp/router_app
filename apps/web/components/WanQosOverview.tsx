@@ -35,6 +35,10 @@ interface NetworkControlSummaryResponse {
     public_ip?: string | null;
     public_ip_checked_at?: number | null;
     public_ip_changed_at?: number | null;
+    ddns_fqdn?: string | null;
+    ddns_synced_ip?: string | null;
+    ddns_synced_at?: number | null;
+    ddns_last_error?: string | null;
     up_flux_bps: number;
     down_flux_bps: number;
     pinned_device_count: number;
@@ -256,8 +260,12 @@ export function WanQosOverview() {
           const isWan1 = w.wan_id === 1;
           const filterKey = w.wan_name.toLowerCase();
           const publicIp = w.public_ip ?? null;
+          const ddnsFqdn = w.ddns_fqdn ?? null;
+          const ddnsSynced = Boolean(ddnsFqdn && publicIp && w.ddns_synced_ip === publicIp && !w.ddns_last_error);
+          const sshHost = ddnsFqdn || publicIp;
           const sshActiveOnWan = ssh.enabled && (isWan1 ? ssh.wan1_active : ssh.wan2_active);
-          const sshCmd = publicIp ? buildSshCommand(ssh.ssh_user, publicIp, ssh.external_port) : '';
+          const sshCmd = sshHost ? buildSshCommand(ssh.ssh_user, sshHost, ssh.external_port) : '';
+          const dnsCopyId = `dns-${w.wan_id}`;
           const ipCopyId = `ip-${w.wan_id}`;
           const sshCopyId = `ssh-${w.wan_id}`;
 
@@ -305,32 +313,43 @@ export function WanQosOverview() {
                 </div>
               </div>
 
-              {/* Real ISP Public IP + 1-Click Copy Actions */}
+              {/* Real ISP Public IP + Private DNS-Only DDNS + 1-Click Copy Actions */}
               <div
-                className="rounded-lg px-2.5 py-2 bg-[var(--bg-elevated)]/55 flex items-center justify-between gap-2 flex-wrap"
+                className="rounded-lg px-2.5 py-2 bg-[var(--bg-elevated)]/55 flex flex-col gap-1.5"
                 dir="ltr"
               >
-                <div className="flex flex-col min-w-0">
-                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-3)' }}>
-                    Public IP {ssh.enabled ? `· Port ${ssh.external_port}` : ''}
-                  </span>
-                  {publicIp ? (
-                    <span
-                      className="font-mono text-sm sm:text-[15px] font-semibold tabular-nums tracking-tight truncate"
-                      style={{ color: 'var(--text)' }}
-                    >
-                      {publicIp}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[11px] font-medium" style={{ color: 'var(--text-3)' }}>
+                      Public IP {ssh.enabled ? `· Port ${ssh.external_port}` : ''}
                     </span>
-                  ) : (
-                    <span className="text-xs" style={{ color: 'var(--text-3)' }}>
-                      {connected ? 'Checking public IP...' : 'Offline'}
-                    </span>
-                  )}
-                </div>
+                    {publicIp ? (
+                      <span
+                        className="font-mono text-sm sm:text-[15px] font-semibold tabular-nums tracking-tight truncate"
+                        style={{ color: 'var(--text)' }}
+                      >
+                        {publicIp}
+                      </span>
+                    ) : (
+                      <span className="text-xs" style={{ color: 'var(--text-3)' }}>
+                        {connected ? 'Checking public IP...' : 'Offline'}
+                      </span>
+                    )}
+                  </div>
 
-                <div className="inline-flex items-center gap-1 shrink-0">
-                  {publicIp && (
-                    <>
+                  <div className="inline-flex items-center gap-1 shrink-0">
+                    {ddnsFqdn && (
+                      <button
+                        type="button"
+                        onClick={() => copyText(dnsCopyId, ddnsFqdn)}
+                        className="btn-ghost !px-2 !py-1 !text-[11px] inline-flex items-center gap-1 font-mono tabular-nums"
+                        title={`Copy hostname: ${ddnsFqdn}`}
+                      >
+                        {copiedKey === dnsCopyId ? <Check size={12} style={{ color: 'var(--mint)' }} /> : <Copy size={12} />}
+                        <span>{copiedKey === dnsCopyId ? 'Copied' : 'DNS'}</span>
+                      </button>
+                    )}
+                    {publicIp && (
                       <button
                         type="button"
                         onClick={() => copyText(ipCopyId, publicIp)}
@@ -340,6 +359,8 @@ export function WanQosOverview() {
                         {copiedKey === ipCopyId ? <Check size={12} style={{ color: 'var(--mint)' }} /> : <Copy size={12} />}
                         <span>{copiedKey === ipCopyId ? 'Copied' : 'IP'}</span>
                       </button>
+                    )}
+                    {sshHost && (
                       <button
                         type="button"
                         onClick={() => copyText(sshCopyId, sshCmd)}
@@ -353,18 +374,43 @@ export function WanQosOverview() {
                         )}
                         <span>{copiedKey === sshCopyId ? 'Copied' : 'SSH'}</span>
                       </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={refreshPublicIps}
-                    disabled={refreshingIps}
-                    className="btn-ghost !p-1.5 !text-[11px] inline-flex items-center justify-center"
-                    title="تحديث الـ Public IP الآن"
-                  >
-                    <RefreshCw size={12} className={clsx(refreshingIps && 'animate-spin')} />
-                  </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={refreshPublicIps}
+                      disabled={refreshingIps}
+                      className="btn-ghost !p-1.5 !text-[11px] inline-flex items-center justify-center"
+                      title="تحديث الـ Public IP و Cloudflare DDNS الآن"
+                    >
+                      <RefreshCw size={12} className={clsx(refreshingIps && 'animate-spin')} />
+                    </button>
+                  </div>
                 </div>
+
+                {ddnsFqdn && (
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-[var(--border)]/60 text-[11px] font-mono min-w-0">
+                    <span className="truncate font-medium" style={{ color: 'var(--ice)' }} title={ddnsFqdn}>
+                      {ddnsFqdn}
+                    </span>
+                    <span
+                      className="shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg)]/70"
+                      style={{ color: ddnsSynced ? 'var(--mint)' : w.ddns_last_error ? 'var(--coral)' : 'var(--sun)' }}
+                      title={
+                        w.ddns_last_error
+                          ? w.ddns_last_error
+                          : ddnsSynced
+                            ? 'Cloudflare DNS-Only A record synced (TTL 60s, no SSL CT log)'
+                            : 'Syncing Cloudflare DNS...'
+                      }
+                    >
+                      <span
+                        className="w-1.5 h-1.5 rounded-full"
+                        style={{ background: ddnsSynced ? 'var(--mint)' : w.ddns_last_error ? 'var(--coral)' : 'var(--sun)' }}
+                      />
+                      {ddnsSynced ? 'CF Direct' : w.ddns_last_error ? 'CF Retry' : 'Syncing'}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-between gap-2 text-xs font-mono tabular-nums" dir="ltr">
@@ -569,11 +615,12 @@ export function WanQosOverview() {
             </div>
           )}
 
-          {wanItems.some((w) => Boolean(w.public_ip)) && (
+          {wanItems.some((w) => Boolean(w.ddns_fqdn || w.public_ip)) && (
             <div className="flex flex-col sm:flex-row gap-2 text-xs font-mono tabular-nums" dir="ltr">
               {wanItems.map((w) => {
-                if (!w.public_ip) return null;
-                const cmd = buildSshCommand(sshUser, w.public_ip, Math.round(Number(sshPort) || 22222));
+                const targetHost = w.ddns_fqdn || w.public_ip;
+                if (!targetHost) return null;
+                const cmd = buildSshCommand(sshUser, targetHost, Math.round(Number(sshPort) || 22222));
                 const cid = `drawer-${w.wan_id}`;
                 return (
                   <button
