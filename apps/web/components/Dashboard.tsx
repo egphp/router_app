@@ -11,6 +11,7 @@ import { TopTalkers } from './TopTalkers';
 import { CategoryBreakdown } from './CategoryBreakdown';
 import { TelemetryCard } from './TelemetryCard';
 import { TelemetryBar } from './TelemetryBar';
+import { WanQosOverview } from './WanQosOverview';
 import { formatBytes, formatDuration, categoryIcon } from '../lib/format';
 import { Activity, Download, Crown, GripVertical, RotateCcw, Lock, Unlock, PieChart } from 'lucide-react';
 
@@ -149,6 +150,7 @@ export function Dashboard() {
       <NsfwBanner />
       <AlertBanner />
       <TelemetryBar />
+      <WanQosOverview />
 
       {/* Fixed status row — always first, not reorderable. Stats on left, Live Speed on right */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-3 sm:gap-4 items-stretch">
@@ -258,7 +260,7 @@ function TopDevicesCard({ top, second }: { top: TopDevice | null; second: TopDev
                 style={{ color: i === 0 ? 'var(--lavender)' : 'var(--text-3)' }}>#{i + 1}</span>
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold truncate" style={{ color: i === 0 ? 'var(--lavender)' : 'var(--text-2)' }}>
-                  {d.label}
+                  <bdi>{d.label}</bdi>
                 </div>
                 <div className="text-[11px] tabular-nums font-semibold" style={{ color: i === 0 ? 'var(--lavender)' : 'var(--text-2)' }}>
                   {formatBytes(d.bytes_down + d.bytes_up)}

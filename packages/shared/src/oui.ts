@@ -26,8 +26,21 @@ const OUI_DB: Record<string, { vendor: string; category: string }> = {
   '42:86:79': { vendor: 'Apple (random)', category: 'phone' },
   'B6:48:C0': { vendor: 'Apple (random)', category: 'phone' },
   'B8:D4:54': { vendor: 'Tenda', category: 'router' },
+  '50:0F:F5': { vendor: 'Tenda', category: 'camera' },
+  'B4:0F:3B': { vendor: 'Tenda', category: 'camera' },
+  '88:00:33': { vendor: 'AICsemi (camera fallback)', category: 'camera' },
   '3C:A9:AB': { vendor: 'Apple', category: 'computer' },
 };
+
+/**
+ * AICsemi AIC8800 Wi-Fi chipset (used inside Tenda CP3 V3.0 cameras) falls back
+ * to a hardcoded 4-byte prefix `88:00:33:77:XX:XX` + 2 random bytes on boot
+ * whenever reading the factory EFUSE MAC times out during power-up.
+ */
+export function isAic8800FallbackMac(mac: string | null | undefined): boolean {
+  if (!mac || typeof mac !== 'string') return false;
+  return /^88:00:33:77:[0-9A-F]{2}:[0-9A-F]{2}$/i.test(mac.trim());
+}
 
 export const DEVICE_CATEGORIES = [
   'phone',
@@ -72,6 +85,7 @@ export function categorizeByName(hostname: string | null | undefined): string | 
   if (hasAny(h, ['ipad', 'tablet', 'galaxy tab', 'tab s', 'tab a', 'lenovo tab', 'mi pad', 'kindle'])) return 'tablet';
   if (hasAny(h, ['watch', 'apple watch', 'galaxy watch', 'fitbit', 'amazfit', 'mi band'])) return 'watch';
   if (hasAny(h, ['playstation', 'ps5', 'ps4', 'xbox', 'nintendo', 'switch', 'steam deck'])) return 'game_console';
+  if (h === 'ipc' || h.startsWith('ipc ') || h.startsWith('ipc-')) return 'camera';
   if (hasAny(h, ['camera', 'ipcam', 'ip cam', 'cctv', 'dahua', 'hikvision', 'ezviz', 'imou', 'reolink', 'tapo cam', 'yi cam', 'wyze', 'arlo', 'ring cam', 'eufycam', 'nest cam'])) return 'camera';
   if (hasAny(h, ['access point', 'access-point', 'ap ', ' ap-', 'eap', 'omada', 'unifi ap', 'ubiquiti', 'mesh', 'deco', 'repeater', 'extender', 'wap'])) return 'access_point';
   if (hasAny(h, ['router', 'gateway', 'modem', 'tenda', 'tp-link', 'tplink', 'archer', 'mikrotik', 'asusrouter', 'keenetic', 'openwrt'])) return 'router';

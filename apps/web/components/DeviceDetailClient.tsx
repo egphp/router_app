@@ -4,7 +4,9 @@ import useSWR from 'swr';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 import { fetcher } from '../lib/fetcher';
 import { formatBps, formatBytes, formatMacShort, categoryIcon, categoryLabel, formatDuration, timeAgo } from '../lib/format';
+import { formatSpeedLimitKbs } from '../lib/control-format';
 import { IpHistoryList, type IpHistoryEntry } from './SecurityFindingDetails';
+import { DeviceControlPanel } from './DeviceControlModal';
 
 type Range = 'hour' | 'today' | 'week' | 'month' | 'year' | 'all';
 
@@ -35,6 +37,13 @@ interface Device {
   notes: string | null;
   reserved?: 0 | 1;
   reserved_ip?: string | null;
+  download_limit_kbs?: number;
+  upload_limit_kbs?: number;
+  qos_known?: 0 | 1;
+  wan_port?: string | null;
+  wan_group_name?: string | null;
+  wan_inherited_range?: 0 | 1;
+  auto_qos_state?: 'pending' | 'applied' | 'reviewed' | 'skipped' | null;
 }
 
 interface DailyRow { day_ts: number; day_label: string; bytes_down: number; bytes_up: number; total: number; }
@@ -125,18 +134,37 @@ export function DeviceDetailClient({ device, initialStats, initialSessions, dail
             {!editing ? (
               <>
                 <h1 className="text-lg sm:text-2xl font-bold flex items-center gap-2 sm:gap-3 flex-wrap">
-                  {displayName}
+                  <bdi>{displayName}</bdi>
                   {currentDevice.is_new === 1 && (
                     <span className="text-[10px] uppercase tracking-wide bg-accent-red text-white rounded px-1.5 py-0.5 font-bold">NEW</span>
                   )}
                   {currentDevice.reserved === 1 && (
                     <span
                       className="text-[10px] uppercase tracking-wide bg-accent-green/15 text-accent-green rounded px-1.5 py-0.5 font-semibold"
+                      dir="ltr"
                       title={currentDevice.reserved_ip ? `Address reservation → ${currentDevice.reserved_ip}` : 'Address reserved on router'}
                     >
                       🔒 reserved{currentDevice.reserved_ip ? ` · ${currentDevice.reserved_ip}` : ''}
                     </span>
                   )}
+                  {currentDevice.wan_port && (
+                    <span
+                      className={`chip !py-0.5 !px-2 !text-[10px] font-mono tabular-nums ${currentDevice.wan_port.toUpperCase() === 'WAN1' ? 'chip-mint' : 'chip-lavender'}`}
+                      dir="ltr"
+                      title={currentDevice.wan_group_name ? `WAN Rule: ${currentDevice.wan_group_name}` : undefined}
+                    >
+                      {currentDevice.wan_port.toUpperCase()}
+                    </span>
+                  )}
+                  {(currentDevice.auto_qos_state === 'applied' || currentDevice.auto_qos_state === 'pending') ? (
+                    <span className="chip chip-sun !py-0.5 !px-2 !text-[10px] font-mono tabular-nums" dir="ltr">
+                      ⚡ Auto SD · ↓ {formatSpeedLimitKbs(currentDevice.download_limit_kbs ?? 256)} / ↑ {formatSpeedLimitKbs(currentDevice.upload_limit_kbs ?? 64)}
+                    </span>
+                  ) : ((currentDevice.download_limit_kbs ?? 0) > 0 || (currentDevice.upload_limit_kbs ?? 0) > 0) ? (
+                    <span className="chip chip-peach !py-0.5 !px-2 !text-[10px] font-mono tabular-nums" dir="ltr">
+                      ↓ {formatSpeedLimitKbs(currentDevice.download_limit_kbs ?? 0)} / ↑ {formatSpeedLimitKbs(currentDevice.upload_limit_kbs ?? 0)}
+                    </span>
+                  ) : null}
                 </h1>
                 <div className="text-sm text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span>{currentDevice.vendor || 'Unknown vendor'}</span>
@@ -227,6 +255,8 @@ export function DeviceDetailClient({ device, initialStats, initialSessions, dail
         <Mini label="Peak ↓" value={formatBps(stats.peak_down_bps)} />
         <Mini label="Peak ↑" value={formatBps(stats.peak_up_bps)} />
       </div>
+
+      <DeviceControlPanel device={currentDevice} onSaved={() => mutate()} />
 
       <div className="card p-5">
         <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">

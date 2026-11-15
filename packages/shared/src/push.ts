@@ -37,6 +37,8 @@ export interface NewDevicePushInput {
   ip?: string | null;
   vendor?: string | null;
   category?: string | null;
+  autoLimited?: { downloadLimitKBs: number; uploadLimitKBs: number } | null;
+  autoReservedIp?: string | null;
 }
 
 export interface NsfwPushInput {
@@ -384,7 +386,13 @@ export function buildNewDevicePushPayload(device: NewDevicePushInput): PushPaylo
   if (!mac) return null;
   const name = trimText(device.hostname, 80) || trimText(device.vendor, 80) || 'Unknown device';
   const ip = trimText(device.ip, 80) || 'no IP';
-  const details = [name, ip, mac, trimText(device.vendor, 80), trimText(device.category, 40)]
+  const autoCapText = device.autoLimited
+    ? `تحديد تلقائي SD: ↓ ${device.autoLimited.downloadLimitKBs} / ↑ ${device.autoLimited.uploadLimitKBs} KB/s`
+    : '';
+  const autoReserveText = trimText(device.autoReservedIp, 40)
+    ? `تثبيت IP تلقائي: ${trimText(device.autoReservedIp, 40)}`
+    : '';
+  const details = [name, ip, mac, trimText(device.vendor, 80), trimText(device.category, 40), autoReserveText, autoCapText]
     .filter((part, index, parts) => part && parts.indexOf(part) === index);
   return {
     title: 'جهاز جديد دخل الشبكة',

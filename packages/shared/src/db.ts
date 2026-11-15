@@ -30,8 +30,8 @@ export function closeDb(): void {
   }
 }
 
-export function runMigrations(): void {
-  const db = getDb();
+export function runMigrations(targetDb?: Database.Database): void {
+  const db = targetDb ?? getDb();
   const migrationsDir = path.resolve(__dirname, 'migrations');
   const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort();
   db.exec(`CREATE TABLE IF NOT EXISTS _migrations (file TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`);

@@ -17,3 +17,8 @@ coverage
 /*.png
 *.jpeg
 apps/web/tenda.db.stray-empty-*
+logs/
+*.err
+*.tsbuildinfo
+.next.bak*
+*.bak-*

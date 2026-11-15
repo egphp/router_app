@@ -55,8 +55,15 @@ export class TelegramNotifier {
     const p = r.payload ? safeJson(r.payload) : null;
     const when = new Date(r.created_at).toLocaleString();
     switch (r.kind) {
-      case 'new_device':
-        return `🔴 *New device* on the LAN\nMAC: \`${r.mac}\`\nName: ${p?.hostname || 'unknown'}\nIP: ${p?.ip || '?'}\nVendor: ${p?.vendor || '?'}\n_${when}_`;
+      case 'new_device': {
+        const autoReserve = p?.auto_reserved_ip
+          ? `\n🔒 Auto-reserved IP: \`${p.auto_reserved_ip}\``
+          : '';
+        const autoCap = (p?.auto_limited_down_kbs || p?.auto_limited_up_kbs)
+          ? `\n⚡ Auto-capped (SD): ↓ ${p?.auto_limited_down_kbs ?? 0} KB/s · ↑ ${p?.auto_limited_up_kbs ?? 0} KB/s`
+          : '';
+        return `🔴 *New device* on the LAN\nMAC: \`${r.mac}\`\nName: ${p?.hostname || 'unknown'}\nIP: ${p?.ip || '?'}\nVendor: ${p?.vendor || '?'}${autoReserve}${autoCap}\n_${when}_`;
+      }
       case 'outage':
         return `⚠ *Router unreachable*\nReason: ${p?.reason || '?'}\n_${when}_`;
       case 'reboot':

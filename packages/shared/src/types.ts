@@ -117,3 +117,53 @@ export type IpcMessage =
   | { type: 'outage-open'; outage: Outage }
   | { type: 'outage-close'; outage: Outage }
   | { type: 'router-state'; state: RouterStateRow };
+
+export interface RouterWanPortState {
+  wanId: number;
+  wanName: string;
+  status: string;
+  wanType: string | null;
+  wanIp: string | null;
+  wanGateway: string | null;
+  upFluxBps: number;
+  downFluxBps: number;
+}
+
+export interface RouterWanIpBinding {
+  ip: string;
+  wanPort: string;
+  ruleId: number;
+  ruleEnabled: boolean;
+  ipGroupId: number | null;
+  ipGroupName: string;
+  startIp: string;
+  endIp: string;
+  inheritedFromRange: boolean;
+}
+
+export interface RouterQosDeviceLimit {
+  mac: string;
+  routerId: number;
+  ip: string | null;
+  routerRemark: string | null;
+  online: 0 | 1;
+  /** Integer KB/s (`0` = unlimited, max `128000`). */
+  downloadLimitKBs: number;
+  /** Integer KB/s (`0` = unlimited, max `128000`). */
+  uploadLimitKBs: number;
+}
+
+export interface RouterTrafficControlState {
+  qosPolicy: number;
+  wanRoutePolicyType: string;
+  wanPorts: RouterWanPortState[];
+  qosDevices: RouterQosDeviceLimit[];
+  wanBindings: RouterWanIpBinding[];
+}
+
+export interface NewDeviceAutoQosConfig {
+  enabled: boolean;
+  autoReserve: boolean;
+  downloadLimitKBs: number;
+  uploadLimitKBs: number;
+}

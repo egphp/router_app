@@ -1,6 +1,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isAic8800FallbackMac } from '@tenda/shared';
 
 interface RawResp {
   status: number;
@@ -20,12 +21,15 @@ export interface RouterLiveDevice {
   down_sum_kb: number;
   connect_type: number | null;
   online_seconds: number | null;
+  download_limit_kbs: number;
+  upload_limit_kbs: number;
 }
 
 export interface RouterLiveSnapshot {
   ts: number;
   source: 'router-direct';
   devices: RouterLiveDevice[];
+  all_hosts_limits: Map<string, { download_limit_kbs: number; upload_limit_kbs: number }>;
   all_devices_down_bps: number;
   all_devices_up_bps: number;
   counter_down_bps: number;
@@ -58,17 +62,35 @@ export function mergeRouterLiveDevices<T extends {
   connect_type?: number | null;
   last_online_at?: number | null;
   last_seen?: number;
+  download_limit_kbs?: number;
+  upload_limit_kbs?: number;
+  qos_known?: 0 | 1;
 }>(devices: T[], live: RouterLiveSnapshot | null): T[] {
   if (!live) return devices;
   const liveByMac = new Map(live.devices.map((d) => [d.mac, d]));
+  const fallbackByIp = new Map<string, RouterLiveDevice>();
+  for (const d of live.devices) {
+    if (isAic8800FallbackMac(d.mac) && d.ip) {
+      fallbackByIp.set(d.ip, d);
+    }
+  }
   return devices.map((device) => {
-    const current = liveByMac.get(device.mac.toUpperCase());
+    const macUp = device.mac.toUpperCase();
+    const current = liveByMac.get(macUp) ?? (device.ip ? fallbackByIp.get(device.ip) : undefined);
+    const liveLimits = live.all_hosts_limits.get(macUp);
     if (!current) {
       return {
         ...device,
         online: 0 as 0 | 1,
         up_speed_bps: 0,
         down_speed_bps: 0,
+        ...(liveLimits
+          ? {
+              download_limit_kbs: liveLimits.download_limit_kbs,
+              upload_limit_kbs: liveLimits.upload_limit_kbs,
+              qos_known: 1 as 0 | 1,
+            }
+          : {}),
       };
     }
     return {
@@ -80,6 +102,9 @@ export function mergeRouterLiveDevices<T extends {
       connect_type: current.connect_type ?? device.connect_type ?? null,
       last_online_at: current.online === 1 ? live.ts : device.last_online_at ?? null,
       last_seen: current.online === 1 ? live.ts : device.last_seen,
+      download_limit_kbs: liveLimits?.download_limit_kbs ?? current.download_limit_kbs ?? device.download_limit_kbs ?? 0,
+      upload_limit_kbs: liveLimits?.upload_limit_kbs ?? current.upload_limit_kbs ?? device.upload_limit_kbs ?? 0,
+      qos_known: (liveLimits ? 1 : (device.qos_known ?? 1)) as 0 | 1,
     };
   });
 }
@@ -121,6 +146,7 @@ class RouterLiveClient {
     const wanDown = Math.max(networkWan.down, infoWan.down);
     const wanUp = Math.max(networkWan.up, infoWan.up);
     const devices = normalizeDevices(res.getQosUserList);
+    const allHostsLimits = extractAllHostLimits(res.getQosUserList);
     const allDown = devices.reduce((sum, d) => sum + d.down_speed_bps, 0);
     const allUp = devices.reduce((sum, d) => sum + d.up_speed_bps, 0);
     const counterDown = this.counterDownBps(ts, devices);
@@ -129,6 +155,7 @@ class RouterLiveClient {
       ts,
       source: 'router-direct',
       devices,
+      all_hosts_limits: allHostsLimits,
       all_devices_down_bps: allDown,
       all_devices_up_bps: allUp,
       counter_down_bps: counterDown,
@@ -280,8 +307,26 @@ function normalizeDevices(rows: Array<Record<string, unknown>> | undefined): Rou
       // Tenda firmware reports onlineTime in MINUTES. We store in seconds so
       // it lines up with samples_raw.online_seconds (= onlineMinutes * 60).
       online_seconds: finiteNumber(row.onlineTime) === null ? null : finiteNumber(row.onlineTime)! * 60,
+      download_limit_kbs: Math.max(0, Math.round(Number(row.hostDownloadLimit ?? 0) || 0)),
+      upload_limit_kbs: Math.max(0, Math.round(Number(row.hostUploadLimit ?? 0) || 0)),
     }))
     .filter((row) => row.mac.length > 0);
+}
+
+function extractAllHostLimits(
+  rows: Array<Record<string, unknown>> | undefined,
+): Map<string, { download_limit_kbs: number; upload_limit_kbs: number }> {
+  const map = new Map<string, { download_limit_kbs: number; upload_limit_kbs: number }>();
+  if (!Array.isArray(rows)) return map;
+  for (const row of rows) {
+    const mac = String(row.hostMAC ?? '').trim().toUpperCase();
+    if (!mac || isAic8800FallbackMac(mac)) continue;
+    map.set(mac, {
+      download_limit_kbs: Math.max(0, Math.round(Number(row.hostDownloadLimit ?? 0) || 0)),
+      upload_limit_kbs: Math.max(0, Math.round(Number(row.hostUploadLimit ?? 0) || 0)),
+    });
+  }
+  return map;
 }
 
 function speedKbToBps(value: unknown): number {

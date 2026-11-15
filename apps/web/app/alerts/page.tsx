@@ -1,9 +1,10 @@
 'use client';
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
-import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter, Ban, ShieldAlert, Gauge } from 'lucide-react';
+import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter, Ban, ShieldAlert, Gauge, Sliders, Lock } from 'lucide-react';
 import { AffectedDeviceList, type AffectedDevice } from '../../components/SecurityFindingDetails';
 
 interface Alert {
@@ -124,11 +125,24 @@ export default function AlertsPage() {
             <div key={a.id} className={`card p-4 flex flex-col gap-3 animate-fade-in border-l-4 sm:flex-row sm:items-start ${tone.border} ${isDismissed ? 'opacity-50' : ''}`}>
               <div className="mt-0.5">{iconFor(a.kind, tone.color)}</div>
               <div className="flex-1 min-w-0">
-                <div className="font-medium">{titleFor(a, payload)}</div>
+                <div className="font-medium flex items-center gap-2 flex-wrap">
+                  <bdi>{titleFor(a, payload)}</bdi>
+                  {a.kind === 'new_device' && payload?.auto_reserved_ip && (
+                    <span className="chip chip-mint !py-0.5 !px-2 !text-[10px] font-mono tabular-nums" dir="ltr">
+                      <Lock size={10} /> Reserved {payload.auto_reserved_ip}
+                    </span>
+                  )}
+                  {a.kind === 'new_device' && (payload?.auto_limited_down_kbs || payload?.auto_limited_up_kbs) && (
+                    <span className="chip chip-sun !py-0.5 !px-2 !text-[10px] font-mono tabular-nums" dir="ltr">
+                      ⚡ Auto-SD ↓ {payload.auto_limited_down_kbs ?? 256} / ↑ {payload.auto_limited_up_kbs ?? 64} KB/s
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-slate-500 mt-1">
-                  {a.mac && <span>MAC {formatMacShort(a.mac)} · </span>}
+                  {a.mac && <span dir="ltr" className="font-mono tabular-nums">MAC {formatMacShort(a.mac)} · </span>}
                   {timeAgo(a.created_at)}
-                  {payload?.detail?.ip && <span> · {payload.detail.ip}</span>}
+                  {payload?.detail?.ip && <span dir="ltr" className="font-mono tabular-nums"> · {payload.detail.ip}</span>}
+                  {payload?.ip && !payload?.detail?.ip && <span dir="ltr" className="font-mono tabular-nums"> · {payload.ip}</span>}
                   {payload?.severity && (
                     <span className={`ml-2 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${tone.badge}`}>
                       {payload.severity}
@@ -140,6 +154,14 @@ export default function AlertsPage() {
               </div>
               {!isDismissed && (
                 <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                  {a.mac && a.kind === 'new_device' && (
+                    <Link
+                      href={`/devices/${encodeURIComponent(a.mac)}`}
+                      className="inline-flex items-center justify-center gap-1.5 rounded border border-[var(--peach)]/35 bg-[var(--peach-soft)] px-3 py-1.5 text-xs text-[var(--peach)] hover:opacity-90"
+                    >
+                      <Sliders size={12} /> Control
+                    </Link>
+                  )}
                   <button onClick={() => ignoreFuture(a.id)}
                     className="inline-flex items-center justify-center gap-1.5 rounded border border-accent-amber/30 bg-accent-amber/10 px-3 py-1.5 text-xs text-accent-amber hover:bg-accent-amber/20">
                     <Ban size={12} /> Ignore future

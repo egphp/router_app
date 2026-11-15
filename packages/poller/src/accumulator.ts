@@ -1,8 +1,9 @@
 import type Database from 'better-sqlite3';
 import type { RouterDevice } from '@tenda/shared';
 import { bucket5Min } from '@tenda/shared';
-import { insertAlertIfAllowed, lookupOui, categorizeByName } from '@tenda/shared';
+import { insertAlertIfAllowed, lookupOui, categorizeByName, isAic8800FallbackMac } from '@tenda/shared';
 import { log } from './logger.js';
+import { enqueueNewDeviceForAutoQos } from './traffic-control.js';
 import { extractWifiMetrics } from './wifi-metrics.js';
 
 interface PrevSample {
@@ -31,7 +32,11 @@ export class Accumulator {
   private closeOpenSession: Database.Statement;
   private addSessionBytes: Database.Statement;
   private fetchDevice: Database.Statement;
+  private touchDeviceLastSeen: Database.Statement;
+  private findCanonicalBySampleIp: Database.Statement;
+  private findCanonicalByReservedIp: Database.Statement | null = null;
   private insertAlert: Database.Statement;
+  private ephemeralPrev = new Map<string, PrevSample>();
 
   constructor(private readonly db: Database.Database) {
     this.upsertDevice = db.prepare(`
@@ -48,6 +53,31 @@ export class Accumulator {
     `);
 
     this.fetchDevice = db.prepare(`SELECT mac FROM devices WHERE mac = ?`);
+    this.touchDeviceLastSeen = db.prepare(`UPDATE devices SET last_seen = MAX(last_seen, ?), updated_at = ? WHERE mac = ?`);
+    this.findCanonicalBySampleIp = db.prepare(`
+      SELECT d.mac
+      FROM devices d
+      WHERE d.mac NOT LIKE '88:00:33:77:%'
+        AND (
+          SELECT s.ip FROM samples_raw s
+          WHERE s.mac = d.mac AND s.ip IS NOT NULL AND s.ip != ''
+          ORDER BY s.ts DESC LIMIT 1
+        ) = ?
+      ORDER BY d.last_seen DESC
+      LIMIT 1
+    `);
+    try {
+      const hasReservations = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dhcp_reservations'`).get();
+      if (hasReservations) {
+        this.findCanonicalByReservedIp = db.prepare(`
+          SELECT mac FROM dhcp_reservations
+          WHERE ip = ? AND mac NOT LIKE '88:00:33:77:%'
+          LIMIT 1
+        `);
+      }
+    } catch {
+      this.findCanonicalByReservedIp = null;
+    }
 
     this.insertSample = db.prepare(`
       INSERT OR REPLACE INTO samples_raw (
@@ -120,6 +150,120 @@ export class Accumulator {
     return !this.fetchDevice.get(mac);
   }
 
+  /**
+   * Resolve the real hardware MAC owning `ip` when an AIC8800 Wi-Fi camera
+   * momentarily associates with its `88:00:33:77:XX:XX` boot-fallback MAC.
+   */
+  private resolveCanonicalMacForIp(ip: string | null | undefined, batchDevices: RouterDevice[]): string | null {
+    const cleanIp = (ip || '').trim();
+    if (!cleanIp) return null;
+
+    if (this.findCanonicalByReservedIp) {
+      const res = this.findCanonicalByReservedIp.get(cleanIp) as { mac: string } | undefined;
+      if (res?.mac) return res.mac.toUpperCase();
+    }
+
+    const fromBatch = batchDevices.find((d) => {
+      const m = (d.hostMAC || '').toUpperCase();
+      return m.length > 0 && !isAic8800FallbackMac(m) && (d.hostIP || '').trim() === cleanIp;
+    });
+    if (fromBatch?.hostMAC) {
+      const candidate = fromBatch.hostMAC.toUpperCase();
+      if (this.fetchDevice.get(candidate)) return candidate;
+    }
+
+    const fromDb = this.findCanonicalBySampleIp.get(cleanIp) as { mac: string } | undefined;
+    return fromDb?.mac ? fromDb.mac.toUpperCase() : null;
+  }
+
+  private processEphemeralFallback(
+    now: number,
+    mac: string,
+    dev: RouterDevice,
+    batchDevices: RouterDevice[],
+    isReboot: boolean,
+  ): { deltaDownBytes: number; deltaUpBytes: number } {
+    const isOnline = dev.hostOnlineStatus === 1;
+    const prev = this.ephemeralPrev.get(mac);
+    if (!isOnline) {
+      if (prev) {
+        this.ephemeralPrev.set(mac, { ...prev, ts: now, online: 0, up_speed_bps: 0, down_speed_bps: 0 });
+      }
+      return { deltaDownBytes: 0, deltaUpBytes: 0 };
+    }
+
+    const upKBs = Number((dev as any).hostUploadSpeed ?? 0);
+    const downKBs = Number((dev as any).hostDownloadSpeed ?? 0);
+    const upSpeed = Math.round(upKBs * 1024);
+    const downSpeed = Math.round(downKBs * 1024);
+    const rawDownSumKb = Number(dev.hostDownloadSum ?? 0);
+    const onlineMinutes = Number((dev as any).onlineTime ?? 0);
+    const onlineSecondsForStorage = onlineMinutes * 60;
+
+    const dtSec = prev ? Math.max(1, Math.round((now - prev.ts) / 1000)) : 30;
+    const gapTooLarge = dtSec > 5 * 60;
+    const reconnected = Boolean(prev && prev.online === 0);
+    const uptimeReset = Boolean(
+      prev &&
+      onlineSecondsForStorage > 0 &&
+      Number(prev.online_seconds ?? 0) > 0 &&
+      onlineSecondsForStorage < Number(prev.online_seconds ?? 0)
+    );
+    const sessionRestarted = reconnected || uptimeReset;
+
+    let downSumKb = rawDownSumKb;
+    let deltaDownBytes = 0;
+    if (!prev) {
+      deltaDownBytes = 0;
+    } else if (isReboot) {
+      deltaDownBytes = downSumKb * 1024;
+    } else if (gapTooLarge) {
+      deltaDownBytes = 0;
+    } else if (rawDownSumKb < prev.down_sum_kb) {
+      if (sessionRestarted) {
+        deltaDownBytes = downSumKb * 1024;
+      } else {
+        downSumKb = prev.down_sum_kb;
+        deltaDownBytes = 0;
+      }
+    } else {
+      const rawDeltaKb = downSumKb - prev.down_sum_kb;
+      deltaDownBytes = rawDeltaKb > 5 * 1024 * 1024 ? 0 : rawDeltaKb * 1024;
+    }
+
+    let deltaUpBytes = 0;
+    if (prev && !gapTooLarge) {
+      deltaUpBytes = Math.round(Math.min(prev.up_speed_bps, upSpeed) * dtSec);
+    }
+
+    this.ephemeralPrev.set(mac, {
+      ts: now,
+      online: 1,
+      up_speed_bps: upSpeed,
+      down_speed_bps: downSpeed,
+      down_sum_kb: downSumKb,
+      online_seconds: onlineSecondsForStorage,
+    });
+
+    const canonicalMac = this.resolveCanonicalMacForIp(dev.hostIP, batchDevices);
+    if (canonicalMac) {
+      this.touchDeviceLastSeen.run(now, now, canonicalMac);
+      this.upsertBucket.run({
+        mac: canonicalMac,
+        bucket_ts: bucket5Min(now),
+        bytes_down: Math.max(0, deltaDownBytes),
+        bytes_up: Math.max(0, deltaUpBytes),
+        speed_down: downSpeed,
+        speed_up: upSpeed,
+        active_sec: prev && !gapTooLarge ? dtSec : 0,
+      });
+      return { deltaDownBytes: Math.max(0, deltaDownBytes), deltaUpBytes: Math.max(0, deltaUpBytes) };
+    }
+
+    log.debug('accumulator: suppressed unmapped AIC8800 boot-fallback MAC', { mac, ip: dev.hostIP });
+    return { deltaDownBytes: 0, deltaUpBytes: 0 };
+  }
+
   /** Process one polling cycle. */
   process(now: number, devices: RouterDevice[], isReboot: boolean): AccumulateResult {
     const newDevices: string[] = [];
@@ -130,6 +274,13 @@ export class Accumulator {
       for (const dev of devices) {
         const mac = (dev.hostMAC || '').toUpperCase();
         if (!mac) continue;
+
+        if (isAic8800FallbackMac(mac)) {
+          const eph = this.processEphemeralFallback(now, mac, dev, devices, isReboot);
+          totalDown += eph.deltaDownBytes;
+          totalUp += eph.deltaUpBytes;
+          continue;
+        }
 
         const isNew = this.isUnknownDevice(mac);
         if (isNew) newDevices.push(mac);
@@ -305,6 +456,13 @@ export class Accumulator {
         totalUp += deltaUpBytes;
 
         if (isNew) {
+          enqueueNewDeviceForAutoQos(
+            this.db,
+            mac,
+            Math.max(0, Math.round(Number((dev as any).hostDownloadLimit ?? 0) || 0)),
+            Math.max(0, Math.round(Number((dev as any).hostUploadLimit ?? 0) || 0)),
+            now,
+          );
           insertAlertIfAllowed(this.db, 'new_device', mac, {
             mac,
             hostname: dev.hostName,

@@ -9,8 +9,15 @@ import { SecurityScanner } from './security.js';
 import { SystemLogPuller } from './system-log-puller.js';
 import { NsfwScanner } from './nsfw-scanner.js';
 import { ThresholdAlertMonitor } from './threshold-alerts.js';
-import { parseRouterUptime, MIN, sendNewDevicePush, sendNsfwPush, sendSecurityPush, lookupOui, categorizeByName } from '@tenda/shared';
+import { parseRouterUptime, MIN, sendNewDevicePush, sendNsfwPush, sendSecurityPush, lookupOui, categorizeByName, type RouterTrafficControlState } from '@tenda/shared';
 import { log } from './logger.js';
+import {
+  normalizeQosDevices,
+  processPendingAutoQos,
+  syncQosDevicesToDb,
+  syncTrafficControlToDb,
+  type AutoQosAppliedOutcome,
+} from './traffic-control.js';
 
 export interface RouterTelemetry {
   ts: number;
@@ -98,8 +105,10 @@ export class Sampler {
     // the security scanner needs them fresh to silence findings for reserved
     // MACs (random or otherwise).
     this.refreshReservations().catch((e) => log.warn('initial reservations refresh failed', String(e)));
+    this.refreshTrafficControls().catch((e) => log.warn('initial traffic-controls refresh failed', String(e)));
     this.reservationTimer = setInterval(() => {
       this.refreshReservations().catch((e) => log.warn('reservations refresh failed', String(e)));
+      this.refreshTrafficControls().catch((e) => log.warn('traffic-controls refresh failed', String(e)));
     }, MIN);
   }
 
@@ -116,6 +125,19 @@ export class Sampler {
 
   getTelemetry(): RouterTelemetry | null {
     return this.telemetry;
+  }
+
+  async refreshTrafficControls(): Promise<RouterTrafficControlState> {
+    const state = await this.router.getTrafficControlState();
+    const now = Date.now();
+    syncTrafficControlToDb(this.db, state, now);
+    this.ipc.broadcast({ type: 'samples-updated', ts: now, deviceCount: state.qosDevices.length });
+    return state;
+  }
+
+  async refreshDhcpReservations(): Promise<void> {
+    await this.refreshReservations();
+    this.ipc.broadcast({ type: 'samples-updated', ts: Date.now(), deviceCount: this.reservedMacs.size });
   }
 
   private async runCycle(): Promise<void> {
@@ -139,6 +161,28 @@ export class Sampler {
       ]);
       const result = this.accumulator.process(now, devices, isReboot);
       const wanResult = this.wanAccumulator.process(now, wanFlux);
+      try {
+        syncQosDevicesToDb(this.db, normalizeQosDevices(devices), now);
+      } catch (e) {
+        log.debug('qos sync skipped', String(e));
+      }
+
+      // Automatically apply SD speed cap (default 256 KB/s down / 64 KB/s up) + DHCP Reservation to newly joined devices
+      let autoApplied = new Map<string, AutoQosAppliedOutcome>();
+      try {
+        autoApplied = await processPendingAutoQos(this.db, this.router, now);
+        if (autoApplied.size > 0) {
+          for (const [mac, outcome] of autoApplied.entries()) {
+            if (outcome.reservedIp) this.reservedMacs.add(mac);
+          }
+          log.info('auto-applied new-device protections (SD cap / DHCP reservation)', {
+            devices: Object.fromEntries(autoApplied.entries()),
+          });
+          this.annotateNewDeviceAlertsWithAutoCap(autoApplied);
+        }
+      } catch (e) {
+        log.warn('auto-qos enforcement error', String(e));
+      }
 
       // NSFW URL detection (cheap; only scans new syslog rows since last tick).
       const nsfwResult = this.nsfw.scan(now);
@@ -167,7 +211,7 @@ export class Sampler {
       this.ipc.broadcast({ type: 'samples-updated', ts: now, deviceCount: result.deviceCount });
       if (result.newDevices.length > 0) {
         log.info('new devices detected', { macs: result.newDevices });
-        void this.sendNewDeviceNotifications(result.newDevices, devices).catch((e) => {
+        void this.sendNewDeviceNotifications(result.newDevices, devices, autoApplied).catch((e) => {
           log.warn('new-device push notification failed', String(e));
         });
       }
@@ -264,7 +308,36 @@ export class Sampler {
     log.debug('reservations refreshed', { count: macs.length });
   }
 
-  private async sendNewDeviceNotifications(newMacs: string[], devices: Array<{ hostMAC?: string; hostName?: string; hostIP?: string }>): Promise<void> {
+  private annotateNewDeviceAlertsWithAutoCap(
+    autoApplied: Map<string, AutoQosAppliedOutcome>,
+  ): void {
+    const findAlert = this.db.prepare(`
+      SELECT id, payload FROM alerts
+      WHERE kind = 'new_device' AND mac = ?
+      ORDER BY id DESC LIMIT 1
+    `);
+    const updateAlert = this.db.prepare(`UPDATE alerts SET payload = ? WHERE id = ?`);
+    for (const [mac, outcome] of autoApplied.entries()) {
+      const row = findAlert.get(mac) as { id: number; payload: string | null } | undefined;
+      if (!row) continue;
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = row.payload ? JSON.parse(row.payload) : {};
+      } catch {
+        parsed = {};
+      }
+      if (outcome.downloadLimitKBs !== null) parsed.auto_limited_down_kbs = outcome.downloadLimitKBs;
+      if (outcome.uploadLimitKBs !== null) parsed.auto_limited_up_kbs = outcome.uploadLimitKBs;
+      if (outcome.reservedIp) parsed.auto_reserved_ip = outcome.reservedIp;
+      updateAlert.run(JSON.stringify(parsed), row.id);
+    }
+  }
+
+  private async sendNewDeviceNotifications(
+    newMacs: string[],
+    devices: Array<{ hostMAC?: string; hostName?: string; hostIP?: string }>,
+    autoApplied: Map<string, AutoQosAppliedOutcome>,
+  ): Promise<void> {
     const byMac = new Map<string, { hostMAC?: string; hostName?: string; hostIP?: string }>();
     for (const device of devices) {
       const mac = normalizeMac(device.hostMAC);
@@ -275,12 +348,19 @@ export class Sampler {
       if (!normalized) continue;
       const device = byMac.get(normalized);
       const oui = lookupOui(normalized);
+      const outcome = autoApplied.get(normalized);
+      const autoLimited =
+        outcome && outcome.downloadLimitKBs !== null && outcome.uploadLimitKBs !== null
+          ? { downloadLimitKBs: outcome.downloadLimitKBs, uploadLimitKBs: outcome.uploadLimitKBs }
+          : null;
       const result = await sendNewDevicePush(this.db, {
         mac: normalized,
         hostname: device?.hostName ?? null,
         ip: device?.hostIP ?? null,
         vendor: oui.vendor,
         category: categorizeByName(device?.hostName) ?? oui.category ?? null,
+        autoLimited,
+        autoReservedIp: outcome?.reservedIp ?? null,
       });
       log.info('new-device push result', { mac: normalized, ...result });
     }

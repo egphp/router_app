@@ -30,6 +30,40 @@ export interface DeviceRow {
   first_seen: number;
   reserved: 0 | 1;
   reserved_ip: string | null;
+  download_limit_kbs: number;
+  upload_limit_kbs: number;
+  qos_known: 0 | 1;
+  wan_port: string | null;
+  wan_group_name: string | null;
+  wan_inherited_range: 0 | 1;
+  auto_qos_state: 'pending' | 'applied' | 'reviewed' | 'skipped' | null;
+}
+
+export interface NetworkControlSummary {
+  qos_policy: number;
+  wan_route_policy: string;
+  wan_ports: Array<{
+    wan_id: number;
+    wan_name: string;
+    status: string;
+    wan_type: string | null;
+    wan_ip: string | null;
+    wan_gateway: string | null;
+    up_flux_bps: number;
+    down_flux_bps: number;
+    pinned_device_count: number;
+    updated_at: number;
+  }>;
+  limited_devices_count: number;
+  pinned_devices_count: number;
+  reserved_devices_count: number;
+  auto_qos_policy: {
+    enabled: boolean;
+    auto_reserve: boolean;
+    download_limit_kbs: number;
+    upload_limit_kbs: number;
+    quarantined_count: number;
+  };
 }
 
 export interface RouterSnapshot {
@@ -84,7 +118,14 @@ export function getLatestDevices(): DeviceRow[] {
            MAX(COALESCE(ses.bd, 0), COALESCE(at.bd, 0)) AS bytes_total,
            MAX(COALESCE(ses.bu, 0), COALESCE(at.bu, 0)) AS bytes_up_total,
            CASE WHEN res.mac IS NOT NULL THEN 1 ELSE 0 END AS reserved,
-           res.ip AS reserved_ip
+           res.ip AS reserved_ip,
+           COALESCE(ql.download_limit_kbs, 0) AS download_limit_kbs,
+           COALESCE(ql.upload_limit_kbs, 0) AS upload_limit_kbs,
+           CASE WHEN ql.mac IS NOT NULL THEN 1 ELSE 0 END AS qos_known,
+           wb.wan_port AS wan_port,
+           wb.ip_group_name AS wan_group_name,
+           COALESCE(wb.inherited_from_range, 0) AS wan_inherited_range,
+           aq.state AS auto_qos_state
     FROM devices d
     LEFT JOIN latest l ON l.mac = d.mac
     LEFT JOIN samples_raw s ON s.mac = d.mac AND s.ts = l.ts
@@ -93,6 +134,9 @@ export function getLatestDevices(): DeviceRow[] {
     LEFT JOIN alltime at ON at.mac = d.mac
     LEFT JOIN sessions ses ON ses.mac = d.mac
     LEFT JOIN dhcp_reservations res ON res.mac = d.mac
+    LEFT JOIN router_qos_limits ql ON ql.mac = d.mac
+    LEFT JOIN router_wan_bindings wb ON wb.ip = COALESCE(s.ip, res.ip) AND wb.rule_enabled = 1
+    LEFT JOIN device_auto_qos aq ON aq.mac = d.mac
     ORDER BY bytes_today DESC, d.last_seen DESC
   `).all(...todayBytes.params, ...allBytes.params) as DeviceRow[];
   return rows.map((r) => ({
@@ -114,7 +158,81 @@ export function getLatestDevices(): DeviceRow[] {
     bytes_up_total: Number(r.bytes_up_total ?? 0),
     reserved: (r.reserved ?? 0) as 0 | 1,
     reserved_ip: r.reserved_ip ?? null,
+    download_limit_kbs: Number(r.download_limit_kbs ?? 0),
+    upload_limit_kbs: Number(r.upload_limit_kbs ?? 0),
+    qos_known: (r.qos_known ?? 0) as 0 | 1,
+    wan_port: r.wan_port ?? null,
+    wan_group_name: r.wan_group_name ?? null,
+    wan_inherited_range: (r.wan_inherited_range ?? 0) as 0 | 1,
+    auto_qos_state: (r.auto_qos_state as DeviceRow['auto_qos_state']) ?? null,
   }));
+}
+
+export function getNetworkControlSummary(): NetworkControlSummary {
+  const conn = db();
+  const kvRows = conn.prepare(`
+    SELECT key, value FROM kv
+    WHERE key IN (
+      'router.qos_policy',
+      'router.wan_route_policy',
+      'router.auto_qos_new_devices.enabled',
+      'router.auto_qos_new_devices.auto_reserve',
+      'router.auto_qos_new_devices.download_kbs',
+      'router.auto_qos_new_devices.upload_kbs'
+    )
+  `).all() as Array<{ key: string; value: string }>;
+  const kvMap = new Map(kvRows.map((r) => [r.key, r.value]));
+
+  const ports = conn.prepare(`
+    SELECT p.wan_id, p.wan_name, p.status, p.wan_type, p.wan_ip, p.wan_gateway,
+           p.up_flux_bps, p.down_flux_bps, p.updated_at,
+           (
+             SELECT COUNT(*) FROM router_wan_bindings wb
+             WHERE wb.wan_port = p.wan_name AND wb.rule_enabled = 1 AND wb.inherited_from_range = 0
+           ) AS pinned_device_count
+    FROM router_wan_ports p
+    ORDER BY p.wan_id ASC
+  `).all() as NetworkControlSummary['wan_ports'];
+
+  const counts = conn.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM router_qos_limits WHERE download_limit_kbs > 0 OR upload_limit_kbs > 0) AS limited_count,
+      (SELECT COUNT(*) FROM router_wan_bindings WHERE rule_enabled = 1 AND inherited_from_range = 0) AS pinned_count,
+      (SELECT COUNT(*) FROM dhcp_reservations) AS reserved_count,
+      (SELECT COUNT(*) FROM device_auto_qos WHERE state IN ('pending', 'applied')) AS quarantined_count
+  `).get() as { limited_count: number; pinned_count: number; reserved_count: number; quarantined_count: number };
+
+  const rawAutoEn = kvMap.get('router.auto_qos_new_devices.enabled');
+  const autoEnabled = rawAutoEn === undefined ? true : rawAutoEn !== '0' && rawAutoEn !== 'false';
+  const rawAutoRes = kvMap.get('router.auto_qos_new_devices.auto_reserve');
+  const autoReserve = rawAutoRes === undefined ? true : rawAutoRes !== '0' && rawAutoRes !== 'false';
+  const rawAutoDl = kvMap.get('router.auto_qos_new_devices.download_kbs');
+  const autoDl = rawAutoDl === undefined ? 256 : Math.max(0, Math.round(Number(rawAutoDl) || 0));
+  const rawAutoUl = kvMap.get('router.auto_qos_new_devices.upload_kbs');
+  const autoUl = rawAutoUl === undefined ? 64 : Math.max(0, Math.round(Number(rawAutoUl) || 0));
+
+  return {
+    qos_policy: Number(kvMap.get('router.qos_policy') ?? 2),
+    wan_route_policy: kvMap.get('router.wan_route_policy') ?? 'custom',
+    wan_ports: ports.map((p) => ({
+      ...p,
+      wan_id: Number(p.wan_id),
+      up_flux_bps: Number(p.up_flux_bps ?? 0),
+      down_flux_bps: Number(p.down_flux_bps ?? 0),
+      pinned_device_count: Number(p.pinned_device_count ?? 0),
+      updated_at: Number(p.updated_at ?? 0),
+    })),
+    limited_devices_count: Number(counts?.limited_count ?? 0),
+    pinned_devices_count: Number(counts?.pinned_count ?? 0),
+    reserved_devices_count: Number(counts?.reserved_count ?? 0),
+    auto_qos_policy: {
+      enabled: autoEnabled,
+      auto_reserve: autoReserve,
+      download_limit_kbs: autoDl,
+      upload_limit_kbs: autoUl,
+      quarantined_count: Number(counts?.quarantined_count ?? 0),
+    },
+  };
 }
 
 export function getRouterSnapshot(): RouterSnapshot {
@@ -470,6 +588,8 @@ export function deleteDevice(mac: string): DeleteDeviceResult {
     ['device_sessions', 'mac'],
     ['device_quotas', 'mac'],
     ['device_enrichment', 'mac'],
+    ['router_qos_limits', 'mac'],
+    ['device_auto_qos', 'mac'],
     ['alerts', 'mac'],
     ['router_syslog', 'attacker_mac'],
     ['nsfw_hits', 'source_mac'],
@@ -530,7 +650,14 @@ export function getDevice(mac: string) {
            COALESCE(s.up_speed_bps, 0) AS up_speed_bps,
            COALESCE(s.down_speed_bps, 0) AS down_speed_bps,
            CASE WHEN res.mac IS NOT NULL THEN 1 ELSE 0 END AS reserved,
-           res.ip AS reserved_ip
+           res.ip AS reserved_ip,
+           COALESCE(ql.download_limit_kbs, 0) AS download_limit_kbs,
+           COALESCE(ql.upload_limit_kbs, 0) AS upload_limit_kbs,
+           CASE WHEN ql.mac IS NOT NULL THEN 1 ELSE 0 END AS qos_known,
+           wb.wan_port AS wan_port,
+           wb.ip_group_name AS wan_group_name,
+           COALESCE(wb.inherited_from_range, 0) AS wan_inherited_range,
+           aq.state AS auto_qos_state
     FROM devices d
     LEFT JOIN (
       SELECT *
@@ -540,6 +667,9 @@ export function getDevice(mac: string) {
       LIMIT 1
     ) s ON s.mac = d.mac
     LEFT JOIN dhcp_reservations res ON res.mac = d.mac
+    LEFT JOIN router_qos_limits ql ON ql.mac = d.mac
+    LEFT JOIN router_wan_bindings wb ON wb.ip = COALESCE(s.ip, res.ip) AND wb.rule_enabled = 1
+    LEFT JOIN device_auto_qos aq ON aq.mac = d.mac
     WHERE d.mac = ?
   `).get(mac, mac);
 }

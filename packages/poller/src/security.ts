@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { RouterDevice } from '@tenda/shared';
-import { insertAlertIfAllowed, lookupOui } from '@tenda/shared';
+import { insertAlertIfAllowed, lookupOui, isAic8800FallbackMac } from '@tenda/shared';
 import { log } from './logger.js';
 
 export interface SecurityCheck {
@@ -75,7 +75,8 @@ export class SecurityScanner {
 
   scan(now: number, devices: RouterDevice[], reservedMacs: Set<string> = new Set()): SecurityCheck[] {
     const out: SecurityCheck[] = [];
-    const onlineDevices = devices.filter((d) => d.hostOnlineStatus === 1) as any[];
+    const filteredDevices = devices.filter((d) => !isAic8800FallbackMac(d.hostMAC));
+    const onlineDevices = filteredDevices.filter((d) => d.hostOnlineStatus === 1) as any[];
 
     // 1. Connection-count spike (possible port scan / many sockets)
     for (const d of onlineDevices) {
@@ -120,7 +121,7 @@ export class SecurityScanner {
     //
     //    Devices the user has reserved on the router (Address Reservation)
     //    are intentionally accepted — silence the finding for them.
-    for (const d of devices as any[]) {
+    for (const d of filteredDevices as any[]) {
       const mac = String(d.hostMAC || '').toUpperCase();
       if (!mac) continue;
       const first = parseInt(mac.slice(0, 2), 16);

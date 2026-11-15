@@ -2,9 +2,15 @@ import http from 'node:http';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import type Database from 'better-sqlite3';
 import type { RouterClient } from './router-client.js';
 import type { Sampler } from './sampler.js';
 import { log } from './logger.js';
+import {
+  getNewDeviceAutoQosConfig,
+  markDeviceAutoQosReviewed,
+  setNewDeviceAutoQosConfig,
+} from './traffic-control.js';
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -12,7 +18,13 @@ const MAX_BODY_BYTES = 16 * 1024;
  * Local-only HTTP control plane. The Next.js web app talks to this server-to-server when the user
  * changes router host/password from /settings. Binds to 127.0.0.1 only and rejects browser CORS/Origin requests.
  */
-export function startControlServer(port: number, router: RouterClient, repoRoot: string, sampler?: Sampler): http.Server {
+export function startControlServer(
+  port: number,
+  router: RouterClient,
+  repoRoot: string,
+  sampler?: Sampler,
+  db?: Database.Database,
+): http.Server {
   const envPath = path.resolve(repoRoot, '.env');
 
   const server = http.createServer(async (req, res) => {
@@ -87,6 +99,165 @@ export function startControlServer(port: number, router: RouterClient, repoRoot:
       if (req.url === '/router-log' && req.method === 'GET') {
         const lines = await router.getSystemLog();
         res.end(JSON.stringify({ ok: true, lines }));
+        return;
+      }
+      if (req.url === '/device-control' && req.method === 'GET') {
+        const state = sampler
+          ? await sampler.refreshTrafficControls()
+          : await router.getTrafficControlState();
+        const autoQos = db ? getNewDeviceAutoQosConfig(db) : null;
+        res.end(JSON.stringify({ ok: true, state, autoQos }));
+        return;
+      }
+      if (req.url === '/auto-qos-policy' && req.method === 'POST') {
+        if (!db) {
+          res.statusCode = 503;
+          res.end(JSON.stringify({ ok: false, error: 'Database handle unavailable' }));
+          return;
+        }
+        const body = await readJson(req);
+        const updated = setNewDeviceAutoQosConfig(db, {
+          enabled: body.enabled !== undefined ? Boolean(body.enabled) : undefined,
+          autoReserve: body.autoReserve !== undefined ? Boolean(body.autoReserve) : undefined,
+          downloadLimitKBs: body.downloadLimitKBs !== undefined ? Number(body.downloadLimitKBs) : undefined,
+          uploadLimitKBs: body.uploadLimitKBs !== undefined ? Number(body.uploadLimitKBs) : undefined,
+        });
+        log.info('updated new-device auto-QoS policy', updated);
+        res.end(JSON.stringify({ ok: true, autoQos: updated }));
+        return;
+      }
+      if (req.url === '/device-control' && req.method === 'POST') {
+        const body = await readJson(req);
+        const {
+          mac,
+          ip,
+          labelHint,
+          downloadLimitKBs,
+          uploadLimitKBs,
+          remark,
+          wanPort,
+          wanGroupName,
+          dhcpReserved,
+        } = body as {
+          mac?: unknown;
+          ip?: unknown;
+          labelHint?: unknown;
+          downloadLimitKBs?: unknown;
+          uploadLimitKBs?: unknown;
+          remark?: unknown;
+          wanPort?: unknown;
+          wanGroupName?: unknown;
+          dhcpReserved?: unknown;
+        };
+
+        const wantsQos = downloadLimitKBs !== undefined || uploadLimitKBs !== undefined;
+        const wantsWan = wanPort !== undefined;
+        const wantsDhcpReserve = dhcpReserved !== undefined;
+        if (!wantsQos && !wantsWan && !wantsDhcpReserve) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, error: 'Specify speed limit, WAN port, and/or DHCP reservation to update.' }));
+          return;
+        }
+
+        let qosResult: Awaited<ReturnType<typeof router.setDeviceSpeedLimit>> | null = null;
+        let wanResult: Awaited<ReturnType<typeof router.setDeviceWanBinding>> | null = null;
+        let dhcpResult: { reserved: boolean; ip?: string; routerId?: number } | null = null;
+
+        if (wantsDhcpReserve) {
+          if (typeof mac !== 'string' || typeof dhcpReserved !== 'boolean') {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, error: 'mac and boolean dhcpReserved are required for DHCP reservation control.' }));
+            return;
+          }
+          if (dhcpReserved) {
+            if (typeof ip !== 'string' || !ip.trim()) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ ok: false, code: 'MISSING_DEVICE_IP', error: 'Device has no known LAN IPv4 address yet for DHCP reservation.' }));
+              return;
+            }
+            const rsv = await router.setDeviceDhcpReservation({
+              mac,
+              ip,
+              remark: typeof remark === 'string' && remark.trim()
+                ? remark
+                : (typeof labelHint === 'string' ? labelHint : null),
+              allowUpdateIp: true,
+            });
+            if (!rsv.ok) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ ok: false, code: rsv.code, error: rsv.error }));
+              return;
+            }
+            dhcpResult = { reserved: true, ip: rsv.applied?.ip, routerId: rsv.applied?.routerId };
+          } else {
+            const rem = await router.removeDeviceDhcpReservation({ mac });
+            if (!rem.ok) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ ok: false, code: rem.code, error: rem.error }));
+              return;
+            }
+            dhcpResult = { reserved: false };
+          }
+          if (sampler) {
+            await sampler.refreshDhcpReservations();
+          }
+        }
+
+        if (wantsQos) {
+          if (typeof mac !== 'string' || typeof downloadLimitKBs !== 'number' || typeof uploadLimitKBs !== 'number') {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, error: 'mac, downloadLimitKBs, and uploadLimitKBs are required for speed control.' }));
+            return;
+          }
+          qosResult = await router.setDeviceSpeedLimit({
+            mac,
+            downloadLimitKBs,
+            uploadLimitKBs,
+            remark: typeof remark === 'string' ? remark : undefined,
+          });
+          if (!qosResult.ok) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, code: qosResult.code, error: qosResult.error }));
+            return;
+          }
+        }
+
+        if (wantsWan) {
+          if (typeof ip !== 'string' || typeof wanPort !== 'string') {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, code: 'MISSING_DEVICE_IP', error: 'Device has no known LAN IPv4 address yet for WAN routing.' }));
+            return;
+          }
+          wanResult = await router.setDeviceWanBinding({
+            ip,
+            labelHint: typeof labelHint === 'string' ? labelHint : null,
+            groupName: typeof wanGroupName === 'string' ? wanGroupName : null,
+            wanPort,
+          });
+          if (!wanResult.ok) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, code: wanResult.code, error: wanResult.error }));
+            return;
+          }
+        }
+
+        const state = sampler
+          ? await sampler.refreshTrafficControls()
+          : await router.getTrafficControlState();
+        if (db && typeof mac === 'string' && mac.trim()) {
+          const macUp = mac.trim().toUpperCase();
+          const now = Date.now();
+          markDeviceAutoQosReviewed(db, macUp, now);
+          db.prepare(`UPDATE devices SET is_new = 0, updated_at = ? WHERE mac = ? AND is_new = 1`).run(now, macUp);
+          db.prepare(`UPDATE alerts SET dismissed_at = ? WHERE kind = 'new_device' AND mac = ? AND dismissed_at IS NULL`).run(now, macUp);
+        }
+        res.end(JSON.stringify({
+          ok: true,
+          qos: qosResult?.applied ?? null,
+          wan: wanResult?.applied ?? null,
+          dhcp: dhcpResult,
+          state,
+        }));
         return;
       }
       res.statusCode = 404;
