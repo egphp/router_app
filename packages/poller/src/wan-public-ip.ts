@@ -35,6 +35,7 @@ export interface CloudflareDdnsConfig {
   remoteScript: string;
   wan1Fqdn: string;
   wan2Fqdn: string;
+  allowFqdnChange?: boolean;
 }
 
 export type DdnsSshExecFn = (
@@ -102,6 +103,7 @@ export function loadCloudflareDdnsConfigFromEnv(
     remoteScript: string;
     wan1Fqdn: string;
     wan2Fqdn: string;
+    allowFqdnChange: boolean;
   }> = {};
   if (resolvedFile) {
     try {
@@ -123,6 +125,10 @@ export function loadCloudflareDdnsConfigFromEnv(
   const remoteScript = VALID_REMOTE_SCRIPT_RE.test(rawRemoteScript) ? rawRemoteScript : '';
   const wan1Fqdn = normalizeDdnsFqdn(env.CF_DDNS_WAN1_FQDN ?? fileJson.wan1Fqdn);
   const wan2Fqdn = normalizeDdnsFqdn(env.CF_DDNS_WAN2_FQDN ?? fileJson.wan2Fqdn);
+  const allowFqdnChange =
+    env.CF_DDNS_ALLOW_FQDN_CHANGE === '1' ||
+    env.CF_DDNS_ALLOW_FQDN_CHANGE === 'true' ||
+    fileJson.allowFqdnChange === true;
 
   const hasFqdn = wan1Fqdn.length > 0 || wan2Fqdn.length > 0;
   if (hasFqdn && sshHost && remoteScript) {
@@ -135,6 +141,7 @@ export function loadCloudflareDdnsConfigFromEnv(
       remoteScript,
       wan1Fqdn,
       wan2Fqdn,
+      allowFqdnChange,
     };
   }
 
@@ -148,6 +155,7 @@ export function loadCloudflareDdnsConfigFromEnv(
       remoteScript: '',
       wan1Fqdn,
       wan2Fqdn,
+      allowFqdnChange,
     };
   }
 
@@ -160,6 +168,7 @@ export function loadCloudflareDdnsConfigFromEnv(
     remoteScript: '',
     wan1Fqdn,
     wan2Fqdn,
+    allowFqdnChange,
   };
 }
 
@@ -527,6 +536,7 @@ export function syncPortMappingsToDb(
 export interface SyncCloudflareWanDnsOptions {
   now?: number;
   force?: boolean;
+  allowFqdnChange?: boolean;
   reverifyIntervalMs?: number;
   fetchFn?: typeof fetch;
   sshExecFn?: DdnsSshExecFn;
@@ -544,6 +554,7 @@ export async function syncCloudflareWanDns(
 
   const now = opts.now ?? Date.now();
   const force = Boolean(opts.force);
+  const allowFqdnChange = Boolean(opts.allowFqdnChange ?? cfg.allowFqdnChange);
   const reverifyMs = opts.reverifyIntervalMs ?? DEFAULT_DDNS_REVERIFY_MS;
   const fetchImpl = opts.fetchFn ?? fetch;
   const sshImpl = opts.sshExecFn ?? execSshDdnsRelay;
@@ -578,11 +589,30 @@ export async function syncCloudflareWanDns(
         ddns_last_error = @err
     WHERE wan_id = @wan_id
   `);
+  const markPinnedLockErr = db.prepare(`
+    UPDATE router_wan_ports
+    SET ddns_last_error = @err
+    WHERE wan_id = @wan_id
+  `);
 
   await Promise.all(
     ports.map(async (port) => {
       const targetFqdn = port.wan_id === 1 ? cfg.wan1Fqdn : port.wan_id === 2 ? cfg.wan2Fqdn : '';
       if (!targetFqdn) return;
+
+      const pinnedFqdn = normalizeDdnsFqdn(port.ddns_fqdn);
+      if (pinnedFqdn && pinnedFqdn !== targetFqdn && !allowFqdnChange) {
+        const lockErr = `Pinned DDNS hostname locked to ${pinnedFqdn}; refusing unapproved change to ${targetFqdn}`;
+        markPinnedLockErr.run({ wan_id: port.wan_id, err: lockErr });
+        updated.set(port.wan_id, { fqdn: pinnedFqdn, ok: false, skipped: false, error: lockErr });
+        log.warn('wan-ddns: blocked unapproved FQDN change', {
+          wan: port.wan_name,
+          pinnedFqdn,
+          attemptedFqdn: targetFqdn,
+        });
+        return;
+      }
+
       if (!isValidPublicIpv4(port.public_ip)) {
         // Persist configured FQDN visibility even if public IP has not resolved yet
         if (port.ddns_fqdn !== targetFqdn) {

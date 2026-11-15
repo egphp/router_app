@@ -399,7 +399,7 @@ export function WanQosOverview() {
                         w.ddns_last_error
                           ? w.ddns_last_error
                           : ddnsSynced
-                            ? 'Cloudflare DNS-Only A record synced (TTL 60s, no SSL CT log)'
+                            ? 'Fixed DDNS hostname (pinned permanently) · Cloudflare DNS-Only A record auto-updates IP (TTL 60s, no SSL CT log)'
                             : 'Syncing Cloudflare DNS...'
                       }
                     >
@@ -407,7 +407,7 @@ export function WanQosOverview() {
                         className="w-1.5 h-1.5 rounded-full"
                         style={{ background: ddnsSynced ? 'var(--mint)' : w.ddns_last_error ? 'var(--coral)' : 'var(--sun)' }}
                       />
-                      {ddnsSynced ? 'CF Direct' : w.ddns_last_error ? 'CF Retry' : 'Syncing'}
+                      {ddnsSynced ? 'Fixed · CF Direct' : w.ddns_last_error ? 'CF Retry' : 'Syncing'}
                     </span>
                   </div>
                 )}

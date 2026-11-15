@@ -819,6 +819,76 @@ test('syncCloudflareWanDns supports tokenless ssh-relay mode so CF_API_TOKEN nev
       ddnsSshExecFn: mockSshExec,
     });
     assert.equal(sshCalls.length, 0);
+
+    // Unapproved subdomain rotation attempt is strictly blocked; pinned hostnames remain immutable
+    const driftedCfg = loadCloudflareDdnsConfigFromEnv({
+      CF_DDNS_SSH_HOST: 'relay-box',
+      CF_DDNS_REMOTE_SCRIPT: '/opt/secrets/ddns_sync.php',
+      CF_DDNS_WAN1_FQDN: 'w1-rotated.example.net',
+      CF_DDNS_WAN2_FQDN: 'w2-rotated.example.net',
+    });
+    assert.equal(Boolean(driftedCfg.allowFqdnChange), false);
+
+    sshCalls.length = 0;
+    await probeWanPublicIps(db, router, {
+      now: t0 + 120_000,
+      httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.240.99' : '156.196.20.88'),
+      dnsProbeFn: async () => null,
+      ddnsConfig: driftedCfg,
+      ddnsSshExecFn: mockSshExec,
+    });
+    assert.equal(sshCalls.length, 0);
+
+    const lockedRows = db
+      .prepare(`SELECT wan_id, ddns_fqdn, ddns_synced_ip, ddns_last_error FROM router_wan_ports ORDER BY wan_id ASC`)
+      .all() as Array<{ wan_id: number; ddns_fqdn: string | null; ddns_synced_ip: string | null; ddns_last_error: string | null }>;
+    assert.equal(lockedRows[0]?.ddns_fqdn, 'w1-relay.example.net');
+    assert.equal(lockedRows[1]?.ddns_fqdn, 'w2-relay.example.net');
+    assert.match(lockedRows[0]?.ddns_last_error ?? '', /Pinned DDNS hostname locked to w1-relay\.example\.net/);
+    assert.match(lockedRows[1]?.ddns_last_error ?? '', /Pinned DDNS hostname locked to w2-relay\.example\.net/);
+
+    // Restoring the pinned hostnames immediately syncs the new ISP IPs and clears the lock warning
+    await probeWanPublicIps(db, router, {
+      now: t0 + 125_000,
+      httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.240.99' : '156.196.20.88'),
+      dnsProbeFn: async () => null,
+      ddnsConfig: relayCfg,
+      ddnsSshExecFn: mockSshExec,
+    });
+    assert.equal(sshCalls.length, 2);
+    const recoveredRows = db
+      .prepare(`SELECT wan_id, ddns_fqdn, ddns_synced_ip, ddns_last_error FROM router_wan_ports ORDER BY wan_id ASC`)
+      .all();
+    assert.deepEqual(recoveredRows, [
+      { wan_id: 1, ddns_fqdn: 'w1-relay.example.net', ddns_synced_ip: '156.196.240.99', ddns_last_error: null },
+      { wan_id: 2, ddns_fqdn: 'w2-relay.example.net', ddns_synced_ip: '156.196.20.88', ddns_last_error: null },
+    ]);
+
+    // Explicit CF_DDNS_ALLOW_FQDN_CHANGE=1 permits intentional owner migration
+    const approvedCfg = loadCloudflareDdnsConfigFromEnv({
+      CF_DDNS_SSH_HOST: 'relay-box',
+      CF_DDNS_REMOTE_SCRIPT: '/opt/secrets/ddns_sync.php',
+      CF_DDNS_WAN1_FQDN: 'w1-intentional.example.net',
+      CF_DDNS_WAN2_FQDN: 'w2-intentional.example.net',
+      CF_DDNS_ALLOW_FQDN_CHANGE: '1',
+    });
+    assert.equal(approvedCfg.allowFqdnChange, true);
+    sshCalls.length = 0;
+    await probeWanPublicIps(db, router, {
+      now: t0 + 130_000,
+      httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.240.99' : '156.196.20.88'),
+      dnsProbeFn: async () => null,
+      ddnsConfig: approvedCfg,
+      ddnsSshExecFn: mockSshExec,
+    });
+    assert.equal(sshCalls.length, 2);
+    const migratedRows = db
+      .prepare(`SELECT wan_id, ddns_fqdn, ddns_synced_ip, ddns_last_error FROM router_wan_ports ORDER BY wan_id ASC`)
+      .all();
+    assert.deepEqual(migratedRows, [
+      { wan_id: 1, ddns_fqdn: 'w1-intentional.example.net', ddns_synced_ip: '156.196.240.99', ddns_last_error: null },
+      { wan_id: 2, ddns_fqdn: 'w2-intentional.example.net', ddns_synced_ip: '156.196.20.88', ddns_last_error: null },
+    ]);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
