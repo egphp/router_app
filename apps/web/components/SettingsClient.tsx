@@ -24,6 +24,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { AiSettingsAndSchedulesSection } from './AiSettingsAndSchedulesSection';
+import { IosPairingCard } from './IosPairingCard';
 
 interface Settings {
   routerHost: string;
@@ -201,6 +202,7 @@ export function SettingsClient() {
         </div>
       </div>
 
+      <IosPairingCard />
       <AiSettingsAndSchedulesSection />
       <RemotePanelAccessCard />
       <PushTestCard />

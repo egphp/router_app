@@ -7,31 +7,69 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		19E1EA7A40069F2123306762 /* OwnerDeviceAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 71E6E7FFB4EC9851EB0F39C5 /* OwnerDeviceAuth */; };
+		1C8C9D933AF71668E7DAC783 /* TendaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF3342F3642CACA7C3D554 /* TendaTheme.swift */; };
 		1F22C16496210E83E323D7D5 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FEEEB4C36FE267D5F93AB7A8 /* PrivacyInfo.xcprivacy */; };
+		3DFA8DB689A03A8F37BA3193 /* SettingsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EE5880146B65DC8840F23C7 /* SettingsTabView.swift */; };
 		44346B498C743F0F35092E40 /* TendaVaultApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09376235F0831DB2E9D15BC /* TendaVaultApp.swift */; };
+		46053E508F9557D83C890709 /* AnalyticsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1031EDF2891F9E95B2FAF1C5 /* AnalyticsTabView.swift */; };
+		5E11D7E2DFA80BE10E894F55 /* TendaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FEEBB345B04C93322513F22 /* TendaStore.swift */; };
 		6F108419FAE7505F84E2CE3D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C479FD37009C9F2F8CF189F2 /* Assets.xcassets */; };
-		AB31331DFF5A36A3F34563B5 /* VaultStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7515F1EC11AB7DBEE089F537 /* VaultStore.swift */; };
-		C47403746A1F676DD77859CC /* Design.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA4657E3971A4F64472ED5C /* Design.swift */; };
-		F5DB85257120405781D863D9 /* VaultAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = D628F4CB93105B91EDA40001 /* VaultAPI.swift */; };
-		FCA7800EC4B981DEED3C464E /* Screens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ABB44623287E001C6C34FB1 /* Screens.swift */; };
+		75473DFA9B2D88219C9C1389 /* OwnerReviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C2EE54069B1C37390D2FD2 /* OwnerReviewSupport.swift */; };
+		8617BE3A994CF45D0E6CF595 /* DevicesTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 836BA49F9314473B22B8D7E6 /* DevicesTabView.swift */; };
+		9F58FCC6800B43B02AB383F9 /* LockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F82E2C8665CEB7E410695999 /* LockView.swift */; };
+		B2D945ED2BA97DD13BEFFCAF /* TendaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A2FBB311F917AB44BC83C52 /* TendaClient.swift */; };
+		B423F92081F7C52A682C72B5 /* HomeTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3971F946A7DD9E3AF92BEA /* HomeTabView.swift */; };
+		CDE6231495C60953E9133173 /* SecurityTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2900F3619986975B67DC07D /* SecurityTabView.swift */; };
+		CF2D9BAD72BE8A9EDCEED820 /* TendaModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA65879313F4B9C35573B96C /* TendaModels.swift */; };
+		F2439717E6AC1820E45F3D8D /* TendaDemoFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3013F4A657E0582B9738B50C /* TendaDemoFixtures.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		1BA4657E3971A4F64472ED5C /* Design.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Design.swift; sourceTree = "<group>"; };
-		7515F1EC11AB7DBEE089F537 /* VaultStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultStore.swift; sourceTree = "<group>"; };
-		7ABB44623287E001C6C34FB1 /* Screens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Screens.swift; sourceTree = "<group>"; };
+		0A2FBB311F917AB44BC83C52 /* TendaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TendaClient.swift; sourceTree = "<group>"; };
+		1031EDF2891F9E95B2FAF1C5 /* AnalyticsTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsTabView.swift; sourceTree = "<group>"; };
+		17AF3342F3642CACA7C3D554 /* TendaTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TendaTheme.swift; sourceTree = "<group>"; };
+		1EE5880146B65DC8840F23C7 /* SettingsTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTabView.swift; sourceTree = "<group>"; };
+		2DB0D188E6A882442E6F7D7B /* OwnerDeviceAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OwnerDeviceAuth; path = "../../../native/ios-shared/OwnerDeviceAuth"; sourceTree = SOURCE_ROOT; };
+		3013F4A657E0582B9738B50C /* TendaDemoFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TendaDemoFixtures.swift; sourceTree = "<group>"; };
+		6B3971F946A7DD9E3AF92BEA /* HomeTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeTabView.swift; sourceTree = "<group>"; };
+		836BA49F9314473B22B8D7E6 /* DevicesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesTabView.swift; sourceTree = "<group>"; };
+		8FEEBB345B04C93322513F22 /* TendaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TendaStore.swift; sourceTree = "<group>"; };
+		B7C2EE54069B1C37390D2FD2 /* OwnerReviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnerReviewSupport.swift; sourceTree = "<group>"; };
 		C09376235F0831DB2E9D15BC /* TendaVaultApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TendaVaultApp.swift; sourceTree = "<group>"; };
 		C479FD37009C9F2F8CF189F2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		CA65879313F4B9C35573B96C /* TendaModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TendaModels.swift; sourceTree = "<group>"; };
 		CF7263FBFA532D485581CC81 /* TendaVault.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TendaVault.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		D628F4CB93105B91EDA40001 /* VaultAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultAPI.swift; sourceTree = "<group>"; };
+		F2900F3619986975B67DC07D /* SecurityTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityTabView.swift; sourceTree = "<group>"; };
+		F82E2C8665CEB7E410695999 /* LockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LockView.swift; sourceTree = "<group>"; };
 		FEEEB4C36FE267D5F93AB7A8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		7952A43CF516B5FA6F73FD11 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				19E1EA7A40069F2123306762 /* OwnerDeviceAuth in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
+		1A96634EF2EE82EF5ED61967 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				2DB0D188E6A882442E6F7D7B /* OwnerDeviceAuth */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
 		3ED3937FAE63758C1EE52340 = {
 			isa = PBXGroup;
 			children = (
 				6B1BCD367DDDA2DF718E15FD /* App */,
+				1A96634EF2EE82EF5ED61967 /* Packages */,
 				D844916B1C4F1082C3527515 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -39,13 +77,21 @@
 		6B1BCD367DDDA2DF718E15FD /* App */ = {
 			isa = PBXGroup;
 			children = (
+				1031EDF2891F9E95B2FAF1C5 /* AnalyticsTabView.swift */,
 				C479FD37009C9F2F8CF189F2 /* Assets.xcassets */,
-				1BA4657E3971A4F64472ED5C /* Design.swift */,
+				836BA49F9314473B22B8D7E6 /* DevicesTabView.swift */,
+				6B3971F946A7DD9E3AF92BEA /* HomeTabView.swift */,
+				F82E2C8665CEB7E410695999 /* LockView.swift */,
+				B7C2EE54069B1C37390D2FD2 /* OwnerReviewSupport.swift */,
 				FEEEB4C36FE267D5F93AB7A8 /* PrivacyInfo.xcprivacy */,
-				7ABB44623287E001C6C34FB1 /* Screens.swift */,
+				F2900F3619986975B67DC07D /* SecurityTabView.swift */,
+				1EE5880146B65DC8840F23C7 /* SettingsTabView.swift */,
+				0A2FBB311F917AB44BC83C52 /* TendaClient.swift */,
+				3013F4A657E0582B9738B50C /* TendaDemoFixtures.swift */,
+				CA65879313F4B9C35573B96C /* TendaModels.swift */,
+				8FEEBB345B04C93322513F22 /* TendaStore.swift */,
+				17AF3342F3642CACA7C3D554 /* TendaTheme.swift */,
 				C09376235F0831DB2E9D15BC /* TendaVaultApp.swift */,
-				D628F4CB93105B91EDA40001 /* VaultAPI.swift */,
-				7515F1EC11AB7DBEE089F537 /* VaultStore.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -67,6 +113,7 @@
 			buildPhases = (
 				93C573B692BD23FABA106911 /* Sources */,
 				D7EC06987CDA0DA22C2D4D97 /* Resources */,
+				7952A43CF516B5FA6F73FD11 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -74,6 +121,7 @@
 			);
 			name = TendaVault;
 			packageProductDependencies = (
+				71E6E7FFB4EC9851EB0F39C5 /* OwnerDeviceAuth */,
 			);
 			productName = TendaVault;
 			productReference = CF7263FBFA532D485581CC81 /* TendaVault.app */;
@@ -102,6 +150,9 @@
 			);
 			mainGroup = 3ED3937FAE63758C1EE52340;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D810587E836773CC3B7DAA75 /* XCLocalSwiftPackageReference "../../../native/ios-shared/OwnerDeviceAuth" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D844916B1C4F1082C3527515 /* Products */;
 			projectDirPath = "";
@@ -129,11 +180,19 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C47403746A1F676DD77859CC /* Design.swift in Sources */,
-				FCA7800EC4B981DEED3C464E /* Screens.swift in Sources */,
+				46053E508F9557D83C890709 /* AnalyticsTabView.swift in Sources */,
+				8617BE3A994CF45D0E6CF595 /* DevicesTabView.swift in Sources */,
+				B423F92081F7C52A682C72B5 /* HomeTabView.swift in Sources */,
+				9F58FCC6800B43B02AB383F9 /* LockView.swift in Sources */,
+				75473DFA9B2D88219C9C1389 /* OwnerReviewSupport.swift in Sources */,
+				CDE6231495C60953E9133173 /* SecurityTabView.swift in Sources */,
+				3DFA8DB689A03A8F37BA3193 /* SettingsTabView.swift in Sources */,
+				B2D945ED2BA97DD13BEFFCAF /* TendaClient.swift in Sources */,
+				F2439717E6AC1820E45F3D8D /* TendaDemoFixtures.swift in Sources */,
+				CF2D9BAD72BE8A9EDCEED820 /* TendaModels.swift in Sources */,
+				5E11D7E2DFA80BE10E894F55 /* TendaStore.swift in Sources */,
+				1C8C9D933AF71668E7DAC783 /* TendaTheme.swift in Sources */,
 				44346B498C743F0F35092E40 /* TendaVaultApp.swift in Sources */,
-				F5DB85257120405781D863D9 /* VaultAPI.swift in Sources */,
-				AB31331DFF5A36A3F34563B5 /* VaultStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -147,13 +206,15 @@
 				CODE_SIGN_ENTITLEMENTS = App/TendaVault.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = App/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "تندا";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tveg.tendavault;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -162,15 +223,19 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/TendaVault.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				INFOPLIST_FILE = App/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "تندا";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tveg.tendavault;
+				PROVISIONING_PROFILE_SPECIFIER = "Tenda Vault AppStore";
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -208,7 +273,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 9SDH6224ZX;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -222,17 +287,19 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_KEY_CFBundleDisplayName = "Tenda Vault";
+				INFOPLIST_KEY_CFBundleDisplayName = "تندا";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -270,7 +337,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 9SDH6224ZX;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -290,7 +357,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_KEY_CFBundleDisplayName = "Tenda Vault";
+				INFOPLIST_KEY_CFBundleDisplayName = "تندا";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -298,10 +365,12 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -327,6 +396,20 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		D810587E836773CC3B7DAA75 /* XCLocalSwiftPackageReference "../../../native/ios-shared/OwnerDeviceAuth" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../../native/ios-shared/OwnerDeviceAuth";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		71E6E7FFB4EC9851EB0F39C5 /* OwnerDeviceAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OwnerDeviceAuth;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4E741045B84BF50FBEFE683C /* Project object */;
 }

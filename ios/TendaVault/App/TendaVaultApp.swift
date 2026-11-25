@@ -2,122 +2,116 @@ import SwiftUI
 
 @main
 struct TendaVaultApp: App {
-    @UIApplicationDelegateAdaptor(VaultAppDelegate.self) private var delegate
-    @StateObject private var store = VaultStore()
+    @UIApplicationDelegateAdaptor(VaultAppDelegate.self) private var appDelegate
+    @StateObject private var store = TendaStore()
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootContainerView()
                 .environmentObject(store)
                 .environment(\.layoutDirection, .rightToLeft)
+                .environment(\.locale, Locale(identifier: "ar_EG@numbers=latn"))
                 .preferredColorScheme(.dark)
-                .tint(Ink.mint)
+                .tint(Aurora.mint)
         }
     }
 }
 
-struct RootView: View {
-    @EnvironmentObject private var store: VaultStore
-    @Environment(\.scenePhase) private var scene
+private struct RootContainerView: View {
+    @EnvironmentObject private var store: TendaStore
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        Group {
-            if store.phase == .ready {
-                MainTabs()
-            } else {
-                LockView()
+        ReviewSwitch(locked: store.isLocked, isPaired: store.isPaired) {
+            LockView()
+        } openContent: {
+            MainTabView()
+        }
+        .background(Aurora.canvas.ignoresSafeArea())
+        .overlay(alignment: .top) {
+            if let message = store.toastMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: store.toastIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(store.toastIsError ? Aurora.coral : Aurora.mint)
+                    Text(message)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Aurora.ink)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(Aurora.surface2, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder((store.toastIsError ? Aurora.coral : Aurora.mint).opacity(0.42), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+                .padding(.top, 10)
+                .padding(.horizontal, 16)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .background(Ink.canvas.ignoresSafeArea())
-        .onChange(of: scene) { _, phase in
-            if phase == .active, store.phase == .ready {
-                store.startPolling()
-                Task { await store.refreshHome() }
-            } else {
+        .animation(.easeInOut(duration: 0.22), value: store.toastMessage)
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                if !store.isLocked || store.isDemoActive {
+                    store.startPolling()
+                    Task { await store.refreshHome(silent: true) }
+                }
+            case .inactive, .background:
                 store.stopPolling()
+            @unknown default:
+                break
             }
         }
     }
 }
 
-struct LockView: View {
-    @EnvironmentObject private var store: VaultStore
+private struct MainTabView: View {
+    @EnvironmentObject private var store: TendaStore
 
     var body: some View {
-        VStack(spacing: 22) {
-            Spacer()
-            ZStack {
-                Circle().stroke(Ink.mint.opacity(0.45), lineWidth: 1.5).frame(width: 96, height: 96)
-                Image(systemName: "touchid")
-                    .font(.system(size: 42, weight: .light))
-                    .foregroundStyle(Ink.mint)
-            }
-            VStack(spacing: 6) {
-                Text("Tenda Vault")
-                    .font(.largeTitle.weight(.semibold))
-                Text("الخزنة لا تفتح إلا ببصمة الجهاز المربوط. لا كلمة مرور هنا.")
-                    .font(.subheadline)
-                    .foregroundStyle(Ink.mist)
-                    .multilineTextAlignment(.center)
-            }
-            if let notice = store.notice {
-                Text(notice)
-                    .font(.footnote)
-                    .foregroundStyle(Ink.amber)
-                    .multilineTextAlignment(.center)
-            }
-            VStack(spacing: 10) {
-                Button {
-                    Task {
-                        if SessionKeychain.load() != nil {
-                            await store.unlockSaved()
-                        } else {
-                            await store.signInWithPasskey()
-                        }
-                    }
-                } label: {
-                    Text(store.phase == .working ? "جاري التحقق" : "الدخول بالبصمة")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(store.phase == .working)
-
-                if SessionKeychain.load() != nil {
-                    Button("بصمة من جديد") { Task { await store.signInWithPasskey() } }
-                        .buttonStyle(.bordered)
+        TabView(selection: $store.selectedTab) {
+            HomeTabView()
+                .tag(AppTab.home)
+                .tabItem {
+                    Label("الرئيسية", systemImage: "waveform.path.ecg")
                 }
 
-                Button("معاينة المراجعة") { Task { await store.enterDemo() } }
-                    .buttonStyle(.bordered)
-            }
-            Text("المعاينة بيانات وهمية لمراجعة أبل، ولا تصل إلى الراوتر.")
-                .font(.caption)
-                .foregroundStyle(Ink.mist)
-            Spacer()
-        }
-        .padding(24)
-    }
-}
+            DevicesTabView()
+                .tag(AppTab.devices)
+                .tabItem {
+                    Label("الأجهزة", systemImage: "laptopcomputer.and.iphone")
+                }
 
-struct MainTabs: View {
-    @EnvironmentObject private var store: VaultStore
-    @AppStorage("vault.tab") private var savedTab = 0
+            SecurityTabView()
+                .tag(AppTab.security)
+                .tabItem {
+                    Label("الحماية", systemImage: "shield.lefthalf.filled")
+                }
+                .badge(store.bootstrap?.counts.alertsUndismissed ?? 0)
 
-    var body: some View {
-        TabView(selection: $store.tab) {
-            HomeView().tag(0).tabItem { Label("الرئيسية", systemImage: "waveform.path.ecg") }
-            DevicesView().tag(1).tabItem { Label("الأجهزة", systemImage: "laptopcomputer.and.iphone") }
-            AlertsView().tag(2).tabItem { Label("التنبيهات", systemImage: "bell") }
-            SecurityHub().tag(3).tabItem { Label("الحماية", systemImage: "shield") }
-            MoreView().tag(4).tabItem { Label("المزيد", systemImage: "square.grid.2x2") }
+            AnalyticsTabView()
+                .tag(AppTab.analytics)
+                .tabItem {
+                    Label("التحليلات", systemImage: "chart.bar.xaxis")
+                }
+
+            SettingsTabView()
+                .tag(AppTab.settings)
+                .tabItem {
+                    Label("الإعدادات", systemImage: "gearshape.fill")
+                }
         }
-        .onAppear {
-            store.tab = savedTab
-            Task {
+        .toolbarBackground(Aurora.surface1, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
+        .toolbarColorScheme(.dark, for: .tabBar)
+        .task {
+            if store.bootstrap == nil {
                 await store.refreshHome()
-                await store.refreshAlerts()
             }
+            store.startPolling()
         }
-        .onChange(of: store.tab) { _, value in savedTab = value }
     }
 }

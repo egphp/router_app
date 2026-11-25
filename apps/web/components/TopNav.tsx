@@ -92,12 +92,12 @@ export function TopNav() {
           {/* Logo — Aurora monogram + display wordmark */}
           <Link href="/" className="flex items-center gap-2.5 shrink-0 group">
             <img
-              src="/icon-64.png"
+              src="/icon-64.png?v=20261125f"
               alt="Tenda Monitor"
-              width={32}
-              height={32}
-              className="rounded-lg shrink-0"
-              style={{ boxShadow: '0 4px 14px -4px oklch(0.82 0.13 50 / 0.4)' }}
+              width={34}
+              height={34}
+              className="shrink-0 object-contain"
+              style={{ background: 'transparent' }}
             />
             <span className="font-display text-base sm:text-lg font-semibold tracking-tight whitespace-nowrap">
               <span className="text-text-primary">Tenda</span>

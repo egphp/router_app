@@ -89,8 +89,9 @@ export function middleware(req: NextRequest) {
     );
   }
 
-  // Enforce Same-Origin CSRF protection on all state-mutating API calls globally
-  if (pathname.startsWith('/api/') && !verifySameOriginRequest(req)) {
+  // Enforce Same-Origin CSRF protection on all state-mutating web API calls globally.
+  // `/api/native/v2/*` handles its own cryptographic device-signature OR same-origin web-passkey gate.
+  if (pathname.startsWith('/api/') && !pathname.startsWith('/api/native/v2/') && !verifySameOriginRequest(req)) {
     logSecurityEvent({
       eventType: 'csrf_blocked',
       rpId: resolveRelyingParty(req).rpID,
@@ -166,6 +167,7 @@ function isPublicPath(pathname: string): boolean {
     pathname === '/api/auth/passkey/register/verify' ||
     pathname === '/api/auth/passkey/enroll-token' ||
     pathname === '/api/auth/native/exchange' ||
+    pathname.startsWith('/api/native/v2/') ||
     pathname === '/privacy'
   );
 }

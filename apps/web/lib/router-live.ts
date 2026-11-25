@@ -53,7 +53,7 @@ export interface RouterLiveSnapshot {
 let client: RouterLiveClient | null = null;
 let clientKey = '';
 
-export async function getRouterLiveSnapshot(): Promise<RouterLiveSnapshot | null> {
+function ensureRouterLiveClient(): RouterLiveClient | null {
   const cfg = readRouterConfig();
   if (!cfg.password) return null;
   const key = `${cfg.host}\n${cfg.password}`;
@@ -61,7 +61,37 @@ export async function getRouterLiveSnapshot(): Promise<RouterLiveSnapshot | null
     client = new RouterLiveClient(cfg.host, cfg.password);
     clientKey = key;
   }
-  return client.snapshot();
+  return client;
+}
+
+export async function getRouterLiveSnapshot(): Promise<RouterLiveSnapshot | null> {
+  const c = ensureRouterLiveClient();
+  if (!c) return null;
+  return c.snapshot();
+}
+
+export async function getRouterSysInfo(): Promise<{
+  model: string | null;
+  firmware: string | null;
+  cpuPercent: number | null;
+  memPercent: number | null;
+  guestWifiEnabled: boolean | null;
+} | null> {
+  const c = ensureRouterLiveClient();
+  if (!c) return null;
+  return c.sysInfo();
+}
+
+export async function rebootRouterDirect(): Promise<{ ok: boolean; error?: string }> {
+  const c = ensureRouterLiveClient();
+  if (!c) return { ok: false, error: 'router credentials not configured' };
+  return c.reboot();
+}
+
+export async function setRouterGuestWifiDirect(enabled: boolean): Promise<{ ok: boolean; enabled?: boolean; error?: string }> {
+  const c = ensureRouterLiveClient();
+  if (!c) return { ok: false, error: 'router credentials not configured' };
+  return c.setGuestWifi(enabled);
 }
 
 export function mergeRouterLiveDevices<T extends {
@@ -182,6 +212,83 @@ class RouterLiveClient {
       best_down_bps: hasActiveWan ? wanDown : Math.max(allDown, counterDown),
       best_up_bps: hasActiveWan ? wanUp : allUp,
     };
+  }
+
+  async sysInfo(): Promise<{
+    model: string | null;
+    firmware: string | null;
+    cpuPercent: number | null;
+    memPercent: number | null;
+    guestWifiEnabled: boolean | null;
+  }> {
+    const res = await this.call<{
+      getSysInfo?: Record<string, unknown>;
+      getGuestWifi?: Record<string, unknown>;
+    }>(['getSysInfo', 'getGuestWifi'], {
+      getSysInfo: '',
+      getGuestWifi: '',
+    });
+    const x = res.getSysInfo ?? {};
+    const num = (v: unknown): number | null => {
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      if (typeof v === 'string') {
+        const n = parseFloat(v.replace('%', ''));
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+    const gw = res.getGuestWifi;
+    let guestWifiEnabled: boolean | null = null;
+    if (gw && typeof gw === 'object') {
+      const rawEn = (gw as Record<string, unknown>).guestEn ?? (gw as Record<string, unknown>).guestWifiEn ?? (gw as Record<string, unknown>).enable;
+      if (typeof rawEn === 'boolean') guestWifiEnabled = rawEn;
+      else if (rawEn === 1 || rawEn === '1' || rawEn === 'true') guestWifiEnabled = true;
+      else if (rawEn === 0 || rawEn === '0' || rawEn === 'false') guestWifiEnabled = false;
+    }
+    return {
+      model: stringOrNull((x as Record<string, unknown>).sysInfoDevName ?? (x as Record<string, unknown>).productName ?? (x as Record<string, unknown>).model),
+      firmware: stringOrNull((x as Record<string, unknown>).sysInfoSoftVersion ?? (x as Record<string, unknown>).softVer ?? (x as Record<string, unknown>).firmware),
+      cpuPercent: num((x as Record<string, unknown>).cpuUsePercent ?? (x as Record<string, unknown>).cpuUsed ?? (x as Record<string, unknown>).cpu),
+      memPercent: num((x as Record<string, unknown>).memoryUsePercent ?? (x as Record<string, unknown>).memUsed ?? (x as Record<string, unknown>).mem),
+      guestWifiEnabled,
+    };
+  }
+
+  async reboot(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await this.call<Record<string, unknown>>(['setReboot'], {
+        setReboot: { reboot: 1 },
+      });
+      const code = res.setReboot;
+      if (code === undefined || Number(code) === 0 || code === true) {
+        return { ok: true };
+      }
+      return { ok: false, error: `router rejected reboot (code ${String(code)})` };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  }
+
+  async setGuestWifi(enabled: boolean): Promise<{ ok: boolean; enabled?: boolean; error?: string }> {
+    try {
+      const cur = await this.call<{ getGuestWifi?: Record<string, unknown> }>(['getGuestWifi'], { getGuestWifi: '' });
+      const existing = cur.getGuestWifi;
+      if (!existing || typeof existing !== 'object' || Object.keys(existing).length === 0) {
+        return { ok: false, error: 'Guest Wi-Fi module is not exposed by this Tenda W30E firmware.' };
+      }
+      const nextPayload: Record<string, unknown> = { ...existing };
+      if ('guestEn' in nextPayload) nextPayload.guestEn = enabled;
+      else if ('guestWifiEn' in nextPayload) nextPayload.guestWifiEn = enabled;
+      else nextPayload.enable = enabled;
+      const res = await this.call<Record<string, unknown>>(['setGuestWifi'], { setGuestWifi: nextPayload });
+      const code = res.setGuestWifi;
+      if (code === undefined || Number(code) === 0 || code === true) {
+        return { ok: true, enabled };
+      }
+      return { ok: false, error: `router rejected guest Wi-Fi update (code ${String(code)})` };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
   }
 
   private counterDownBps(ts: number, devices: RouterLiveDevice[]): number {
