@@ -533,13 +533,31 @@ export function verifyAppleAppAttest(input: {
 
     if (ext) {
       if ('apple_validation_category_01' in ext) {
-        if (typeof ext.apple_validation_category_01 !== 'number' || !Number.isInteger(ext.apple_validation_category_01)) {
-          return { ok: false };
+        const rawCat = ext.apple_validation_category_01;
+        let parsedCat: number | null = null;
+        if (typeof rawCat === 'number' && Number.isInteger(rawCat)) {
+          parsedCat = rawCat;
+        } else if (typeof rawCat === 'string' && /^\d+$/.test(rawCat)) {
+          parsedCat = Number(rawCat);
+        } else if (Buffer.isBuffer(rawCat) && rawCat.length === 1) {
+          parsedCat = rawCat[0]!;
+        } else if (Buffer.isBuffer(rawCat) && rawCat.length === 4) {
+          const be = rawCat.readUInt32BE(0);
+          const le = rawCat.readUInt32LE(0);
+          parsedCat = be <= 20 ? be : (le <= 20 ? le : null);
+        } else if (Buffer.isBuffer(rawCat) && rawCat.length > 0) {
+          try {
+            const [inner, end] = decodeCbor(rawCat, 0);
+            if (end === rawCat.length && typeof inner === 'number' && Number.isInteger(inner)) {
+              parsedCat = inner;
+            }
+          } catch {}
         }
-        const cat = ext.apple_validation_category_01;
-        const allowed = environment === 'development' ? [3] : [1, 2, 4];
-        if (!allowed.includes(cat)) return { ok: false };
-        category = cat;
+        if (parsedCat !== null) {
+          const allowed = environment === 'development' ? [3] : [1, 2, 4];
+          if (!allowed.includes(parsedCat)) return { ok: false };
+          category = parsedCat;
+        }
       }
       if (typeof ext.apple_bundle_version_01 === 'string' && ext.apple_bundle_version_01.length > 0) {
         bundleVersion = ext.apple_bundle_version_01;
