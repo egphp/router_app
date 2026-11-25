@@ -216,9 +216,13 @@ export function LoginClient() {
       <div className="card w-full max-w-md p-6 sm:p-7 space-y-5 border border-bg-border">
         {/* Header */}
         <div className="flex items-start gap-3.5">
-          <div className="w-12 h-12 rounded-2xl bg-accent/15 border border-accent/30 flex items-center justify-center shrink-0">
-            <Fingerprint size={26} className="text-accent" />
-          </div>
+          <img
+            src="/icon-64.png"
+            alt="Tenda Vault"
+            width={48}
+            height={48}
+            className="w-12 h-12 rounded-2xl shrink-0"
+          />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-lg sm:text-xl font-semibold">Tenda Biometric Vault</h1>

@@ -12,6 +12,7 @@ import { ThresholdAlertMonitor } from './threshold-alerts.js';
 import { parseRouterUptime, MIN, sendNewDevicePush, sendNsfwPush, sendSecurityPush, lookupOui, categorizeByName, type RouterTrafficControlState } from '@tenda/shared';
 import { log } from './logger.js';
 import {
+  evaluateNewDeviceTrustWithAi,
   normalizeQosDevices,
   processPendingAutoQos,
   syncQosDevicesToDb,
@@ -21,6 +22,7 @@ import {
 import {
   FALLBACK_SSH_WAN2_INTERNAL_PORT,
   SshLocalRelay,
+  evaluateSshSelfHeal,
   getSshAccessConfig,
   isLocalIpv4,
   probeWanPublicIps,
@@ -153,17 +155,33 @@ export class Sampler {
   async refreshWanPublicIpsAndSsh(opts?: { forceDdnsSync?: boolean }): Promise<Map<number, string | null>> {
     const now = Date.now();
     try {
-      let mappings = await this.router.getPortMappings();
+      let mappings = await this.router.getPortMappings({ throwOnError: true });
       const sshCfg = getSshAccessConfig(this.db, this.router.getHost());
       if (sshCfg.enabled && sshCfg.targetIp) {
         const vips = resolveSymmetricSshVips(sshCfg.targetIp);
-        const hasWan1 = mappings.some(
-          (m) => m.wanId === 1 && m.serverIp === vips.wan1Ip && m.externalPort === sshCfg.externalPort && m.enabled,
-        );
-        const hasWan2 = mappings.some(
-          (m) => m.wanId === 2 && m.serverIp === vips.wan2Ip && m.externalPort === sshCfg.externalPort && m.enabled,
-        );
-        if (!hasWan1 || !hasWan2) {
+        const wanBindings = (
+          this.db
+            .prepare(`SELECT ip, wan_port, rule_enabled FROM router_wan_bindings`)
+            .all() as Array<{ ip: string; wan_port: string; rule_enabled: number }>
+        ).map((b) => ({ ip: b.ip, wanPort: b.wan_port, ruleEnabled: b.rule_enabled === 1 }));
+        const policyRow = this.db
+          .prepare(`SELECT value FROM kv WHERE key = 'router.wan_route_policy'`)
+          .get() as { value: string } | undefined;
+        const activePorts = this.db
+          .prepare(`SELECT wan_id FROM router_wan_ports WHERE status IN ('wired', 'connected')`)
+          .all() as Array<{ wan_id: number }>;
+        const activeWanIds = new Set<number>(activePorts.map((p) => Number(p.wan_id)));
+
+        const heal = evaluateSshSelfHeal({
+          sshCfg,
+          vips,
+          mappings,
+          wanBindings,
+          wanRoutePolicy: policyRow?.value ?? null,
+          activeWanIds,
+        });
+        if (heal.needsRepair) {
+          log.info('sampler: self-healing Dual-WAN SSH config', { reasons: heal.reasons });
           await this.router.configureSshPortMapping({
             enabled: true,
             targetIp: sshCfg.targetIp,
@@ -171,7 +189,10 @@ export class Sampler {
             wan2TargetIp: vips.wan2Ip,
             externalPort: sshCfg.externalPort,
           });
-          mappings = await this.router.getPortMappings();
+          mappings = await this.router.getPortMappings({ throwOnError: true });
+          await this.refreshTrafficControls().catch((err) =>
+            log.debug('post-ssh-heal traffic-controls refresh skipped', String(err)),
+          );
         }
       }
       syncPortMappingsToDb(this.db, mappings, now);
@@ -232,7 +253,7 @@ export class Sampler {
         this.router.getDeviceList(),
         this.router.getWanFlux(),
       ]);
-      const result = this.accumulator.process(now, devices, isReboot);
+      const result = this.accumulator.process(now, devices, isReboot, wanFlux);
       const wanResult = this.wanAccumulator.process(now, wanFlux);
       try {
         syncQosDevicesToDb(this.db, normalizeQosDevices(devices), now);
@@ -257,13 +278,21 @@ export class Sampler {
         log.warn('auto-qos enforcement error', String(e));
       }
 
-      // NSFW URL detection (cheap; only scans new syslog rows since last tick).
+      // NSFW URL detection (cheap; scans new router_syslog + UDP router_log rows, plus async zero-day Gemini Decision triage).
       const nsfwResult = this.nsfw.scan(now);
       if (nsfwResult.pushCandidates.length > 0) {
         void this.sendNsfwNotifications(nsfwResult.pushCandidates).catch((e) => {
           log.warn('nsfw push notification failed', String(e));
         });
       }
+      void this.nsfw
+        .tickAiDomainTriage(now)
+        .then((aiNsfw) => {
+          if (aiNsfw.pushCandidates.length > 0) {
+            return this.sendNsfwNotifications(aiNsfw.pushCandidates);
+          }
+        })
+        .catch((e) => log.debug('nsfw ai triage tick skipped', String(e)));
 
       // Security checks every cycle (with internal dedupe). Pass the cached
       // reserved-MAC set so the scanner can skip findings for devices the user
@@ -271,6 +300,7 @@ export class Sampler {
       const sec = this.security.scan(now, devices, this.reservedMacs);
       if (sec.length > 0) {
         log.warn('security checks fired', { count: sec.length, rules: [...new Set(sec.map(s => s.rule))] });
+        void this.security.triageFindingsWithAi(sec, now).catch(() => {});
         void this.sendSecurityNotifications(sec).catch((e) => {
           log.warn('security push notification failed', String(e));
         });
@@ -284,6 +314,9 @@ export class Sampler {
       this.ipc.broadcast({ type: 'samples-updated', ts: now, deviceCount: result.deviceCount });
       if (result.newDevices.length > 0) {
         log.info('new devices detected', { macs: result.newDevices });
+        for (const mac of result.newDevices) {
+          void evaluateNewDeviceTrustWithAi(this.db, mac, now).catch(() => {});
+        }
         void this.sendNewDeviceNotifications(result.newDevices, devices, autoApplied).catch((e) => {
           log.warn('new-device push notification failed', String(e));
         });

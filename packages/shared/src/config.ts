@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,16 +6,20 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function resolveRepoRoot(): string {
-  let dir = __dirname;
-  for (let i = 0; i < 8; i++) {
-    if (fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+export function resolveRepoRoot(): string {
+  for (const startDir of [process.cwd(), __dirname]) {
+    let dir = startDir;
+    for (let i = 0; i < 8; i++) {
+      if (fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
   }
   return process.cwd();
 }
+
+dotenv.config({ path: path.join(resolveRepoRoot(), '.env') });
 
 export interface Config {
   routerHost: string;

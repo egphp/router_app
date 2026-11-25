@@ -24,14 +24,17 @@ export async function GET(req: Request) {
   return NextResponse.json({
     ...series,
     speeds,
-    source: 'router-direct',
+    source: live.has_active_wan ? 'wan' : 'router-direct',
     latest_ts: live.ts,
     direct: {
+      wan_lines: live.wan_lines,
       all_devices_down_bps: live.all_devices_down_bps,
       all_devices_up_bps: live.all_devices_up_bps,
       counter_down_bps: live.counter_down_bps,
       wan_down_bps: live.wan_down_bps,
       wan_up_bps: live.wan_up_bps,
+      lan_local_down_bps: live.lan_local_down_bps,
+      lan_local_up_bps: live.lan_local_up_bps,
     },
   });
 }

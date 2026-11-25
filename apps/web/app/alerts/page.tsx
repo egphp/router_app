@@ -6,6 +6,7 @@ import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
 import { Bell, Smartphone, WifiOff, RefreshCw, Shield, CheckSquare, X, Filter, Ban, ShieldAlert, Gauge, Sliders, Lock, Globe } from 'lucide-react';
 import { AffectedDeviceList, type AffectedDevice } from '../../components/SecurityFindingDetails';
+import { AskGeminiButton } from '../../components/AskGeminiButton';
 
 interface Alert {
   id: number; kind: string; mac: string | null; payload: string | null;
@@ -152,6 +153,21 @@ export default function AlertsPage() {
                 </div>
                 {payload?.message && <div className="text-sm mt-1 text-slate-300">{payload.message}</div>}
                 {payload?.detail && <AlertDetailView alert={a} payload={payload} />}
+                <div className="mt-2">
+                  <AskGeminiButton
+                    compact
+                    scopeType="alert"
+                    scopeKey={`alert-${a.id}`}
+                    contextPayload={{
+                      id: a.id,
+                      kind: a.kind,
+                      mac: a.mac,
+                      device_label: a.device_label,
+                      created_at: a.created_at,
+                      payload,
+                    }}
+                  />
+                </div>
               </div>
               {!isDismissed && (
                 <div className="flex shrink-0 flex-col gap-2 sm:flex-row">

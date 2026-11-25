@@ -7,9 +7,10 @@
     "dev": "next dev -p 3030",
     "build": "next build",
     "start": "next start -p 3030",
-    "test": "node --import ../../packages/poller/node_modules/tsx/dist/loader.mjs --test test/*.test.ts"
+    "test": "node --conditions=dev-source --import ../../packages/poller/node_modules/tsx/dist/loader.mjs --test test/*.test.ts"
   },
   "dependencies": {
+    "@google/genai": "^3.3.0",
     "@simplewebauthn/browser": "^14.0.0",
     "@simplewebauthn/server": "^14.1.0",
     "@tenda/shared": "workspace:*",

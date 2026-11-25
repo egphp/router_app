@@ -136,6 +136,15 @@ export class RollupWorker {
       grouped.set(key, g);
     }
 
+    let minTargetBucket = Number.POSITIVE_INFINITY;
+    for (const g of grouped.values()) {
+      if (g.bucket_ts < minTargetBucket) minTargetBucket = g.bucket_ts;
+    }
+
+    const deleteRange = this.db.prepare(`
+      DELETE FROM ${opts.to} WHERE bucket_ts >= ? AND bucket_ts < ?
+    `);
+
     const upsert = this.db.prepare(`
       INSERT INTO ${opts.to} (mac, bucket_ts, bytes_down, bytes_up, active_sec, peak_down_bps, peak_up_bps)
       VALUES (@mac, @bucket_ts, @bytes_down, @bytes_up, @active_sec, @peak_down_bps, @peak_up_bps)
@@ -148,6 +157,9 @@ export class RollupWorker {
     `);
 
     const txn = this.db.transaction(() => {
+      if (Number.isFinite(minTargetBucket)) {
+        deleteRange.run(minTargetBucket, opts.cutoff);
+      }
       for (const g of grouped.values()) upsert.run(g);
     });
     txn();

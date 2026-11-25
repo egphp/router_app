@@ -399,6 +399,72 @@ export function resolveSymmetricSshVips(
   };
 }
 
+export interface SshSelfHealBinding {
+  ip: string;
+  wanPort: string;
+  ruleEnabled: boolean;
+}
+
+export interface EvaluateSshSelfHealInput {
+  sshCfg: SshAccessConfig;
+  vips: SymmetricSshVips;
+  mappings: RouterPortMappingRule[];
+  wanBindings: SshSelfHealBinding[];
+  wanRoutePolicy?: string | null;
+  activeWanIds?: Set<number>;
+}
+
+/**
+ * Determine whether Dual-WAN SSH port mappings OR symmetric Multi-WAN VIP route rules
+ * (`ssh_wan1` / `ssh_wan2`) are missing/disabled on the router and need self-healing.
+ * Only enforces rules for currently active WAN interfaces so temporary Single-WAN periods
+ * do not spam failed writes, while healing immediately the moment WAN2 returns.
+ */
+export function evaluateSshSelfHeal(input: EvaluateSshSelfHealInput): {
+  needsRepair: boolean;
+  reasons: string[];
+} {
+  const { sshCfg, vips, mappings, wanBindings } = input;
+  if (!sshCfg.enabled || !sshCfg.targetIp) {
+    return { needsRepair: false, reasons: [] };
+  }
+
+  const active = input.activeWanIds && input.activeWanIds.size > 0
+    ? input.activeWanIds
+    : new Set<number>([1, 2]);
+  const wan1Active = active.has(1);
+  const wan2Active = active.has(2);
+
+  const reasons: string[] = [];
+
+  const hasWan1Map = mappings.some(
+    (m) => m.wanId === 1 && m.serverIp === vips.wan1Ip && m.externalPort === sshCfg.externalPort && m.enabled,
+  );
+  const hasWan2Map = mappings.some(
+    (m) => m.wanId === 2 && m.serverIp === vips.wan2Ip && m.externalPort === sshCfg.externalPort && m.enabled,
+  );
+
+  if (wan1Active && !hasWan1Map) reasons.push('missing_wan1_port_mapping');
+  if (wan2Active && !hasWan2Map) reasons.push('missing_wan2_port_mapping');
+
+  if (vips.symmetricVipsActive) {
+    const policy = (input.wanRoutePolicy ?? '').trim().toLowerCase();
+    if (policy && policy !== 'custom') {
+      reasons.push('wan_route_policy_not_custom');
+    }
+    const hasWan1Pin = wanBindings.some(
+      (b) => b.ip === vips.wan1Ip && b.wanPort.trim().toUpperCase() === 'WAN1' && b.ruleEnabled,
+    );
+    const hasWan2Pin = wanBindings.some(
+      (b) => b.ip === vips.wan2Ip && b.wanPort.trim().toUpperCase() === 'WAN2' && b.ruleEnabled,
+    );
+    if (wan1Active && !hasWan1Pin) reasons.push('missing_wan1_route_binding');
+    if (wan2Active && !hasWan2Pin) reasons.push('missing_wan2_route_binding');
+  }
+
+  return { needsRepair: reasons.length > 0, reasons };
+}
+
 export function isLocalIpv4(ip: string): boolean {
   const trimmed = ip.trim();
   if (!net.isIPv4(trimmed)) return false;
@@ -595,6 +661,13 @@ export async function syncCloudflareWanDns(
     WHERE wan_id = @wan_id
   `);
 
+  const port1Row = ports.find((p) => p.wan_id === 1);
+  const port2Row = ports.find((p) => p.wan_id === 2);
+  const duplicateAcrossWans =
+    isValidPublicIpv4(port1Row?.public_ip) &&
+    isValidPublicIpv4(port2Row?.public_ip) &&
+    port1Row!.public_ip === port2Row!.public_ip;
+
   await Promise.all(
     ports.map(async (port) => {
       const targetFqdn = port.wan_id === 1 ? cfg.wan1Fqdn : port.wan_id === 2 ? cfg.wan2Fqdn : '';
@@ -618,6 +691,18 @@ export async function syncCloudflareWanDns(
         if (port.ddns_fqdn !== targetFqdn) {
           markErr.run({ wan_id: port.wan_id, fqdn: targetFqdn, err: port.ddns_last_error });
         }
+        return;
+      }
+
+      if (duplicateAcrossWans) {
+        const dupErr = `Refused duplicate public IP ${port.public_ip} shared by WAN1 and WAN2 (VPN or WAN failover active)`;
+        markPinnedLockErr.run({ wan_id: port.wan_id, err: dupErr });
+        updated.set(port.wan_id, { fqdn: targetFqdn, ok: false, skipped: true, error: dupErr });
+        log.warn('wan-ddns: refused duplicate public IP across WAN1 and WAN2', {
+          wan: port.wan_name,
+          fqdn: targetFqdn,
+          ip: port.public_ip,
+        });
         return;
       }
 
@@ -806,19 +891,14 @@ export async function probeWanPublicIps(
 
   const rotated: Array<{ wanId: number; wanName: string; previousIp: string; publicIp: string }> = [];
 
+  // Phase 1: Probe all connected WANs concurrently before mutating DB so we can detect
+  // VPN tunnel leaks (both WANs returning the same exit IP) and WAN failover leaks
+  // (e.g. WAN2 failing over onto WAN1 and returning WAN1's public IP).
+  const probedByWan = new Map<number, string | null>();
   await Promise.all(
     ports.map(async (port) => {
       const connected = port.status === 'wired' || port.status === 'connected';
-      if (!connected) {
-        updatePort.run({
-          wan_id: port.wan_id,
-          public_ip: null,
-          checked_at: now,
-          changed_at: port.public_ip_changed_at,
-        });
-        result.set(port.wan_id, null);
-        return;
-      }
+      if (!connected) return;
 
       const endpoints =
         port.wan_id === 1
@@ -826,10 +906,7 @@ export async function probeWanPublicIps(
           : port.wan_id === 2
             ? WAN2_PROBE_ENDPOINTS
             : null;
-      if (!endpoints) {
-        result.set(port.wan_id, port.public_ip);
-        return;
-      }
+      if (!endpoints) return;
 
       let resolvedIp: string | null = null;
       try {
@@ -852,43 +929,100 @@ export async function probeWanPublicIps(
         }
       }
 
-      if (!resolvedIp) {
-        // Keep last known public_ip on transient probe blip, only bump checked_at
-        updatePort.run({
-          wan_id: port.wan_id,
-          public_ip: port.public_ip,
-          checked_at: now,
-          changed_at: port.public_ip_changed_at,
-        });
-        result.set(port.wan_id, port.public_ip);
-        return;
-      }
-
-      const changed = port.public_ip !== resolvedIp;
-      const changedAt = changed ? now : (port.public_ip_changed_at ?? now);
-      updatePort.run({
-        wan_id: port.wan_id,
-        public_ip: resolvedIp,
-        checked_at: now,
-        changed_at: changedAt,
-      });
-      result.set(port.wan_id, resolvedIp);
-
-      if (port.public_ip && port.public_ip !== resolvedIp) {
-        log.info('wan-public-ip: ISP public IP changed', {
-          wan: port.wan_name,
-          previousIp: port.public_ip,
-          publicIp: resolvedIp,
-        });
-        rotated.push({
-          wanId: port.wan_id,
-          wanName: port.wan_name,
-          previousIp: port.public_ip,
-          publicIp: resolvedIp,
-        });
-      }
+      probedByWan.set(port.wan_id, resolvedIp);
     }),
   );
+
+  // Phase 2: Cross-WAN poisoning guard. Two physically separate ISP WANs cannot share a public IP.
+  const port1 = ports.find((p) => p.wan_id === 1);
+  const port2 = ports.find((p) => p.wan_id === 2);
+  const cand1 = probedByWan.get(1) ?? null;
+  const cand2 = probedByWan.get(2) ?? null;
+  const rejectedWans = new Map<number, string>();
+
+  if (cand1 && cand2 && cand1 === cand2) {
+    if (port1?.public_ip === cand1 && port2?.public_ip !== cand1) {
+      rejectedWans.set(2, 'WAN2 probe returned WAN1 public IP (failover or missing /32 route)');
+    } else if (port2?.public_ip === cand2 && port1?.public_ip !== cand2) {
+      rejectedWans.set(1, 'WAN1 probe returned WAN2 public IP (failover or missing /32 route)');
+    } else {
+      rejectedWans.set(1, 'WAN1 and WAN2 returned identical public IP (VPN tunnel or failover active)');
+      rejectedWans.set(2, 'WAN1 and WAN2 returned identical public IP (VPN tunnel or failover active)');
+    }
+  } else {
+    if (cand2 && !cand1 && port1?.public_ip && cand2 === port1.public_ip && port2?.public_ip !== cand2) {
+      rejectedWans.set(2, 'WAN2 probe returned WAN1 persisted public IP while WAN1 probe was unavailable');
+    }
+    if (cand1 && !cand2 && port2?.public_ip && cand1 === port2.public_ip && port1?.public_ip !== cand1) {
+      rejectedWans.set(1, 'WAN1 probe returned WAN2 persisted public IP while WAN2 probe was unavailable');
+    }
+  }
+
+  for (const port of ports) {
+    const connected = port.status === 'wired' || port.status === 'connected';
+    if (!connected) {
+      updatePort.run({
+        wan_id: port.wan_id,
+        public_ip: null,
+        checked_at: now,
+        changed_at: port.public_ip_changed_at,
+      });
+      result.set(port.wan_id, null);
+      continue;
+    }
+
+    if (port.wan_id !== 1 && port.wan_id !== 2) {
+      result.set(port.wan_id, port.public_ip);
+      continue;
+    }
+
+    const resolvedIp = probedByWan.get(port.wan_id) ?? null;
+    const rejectReason = rejectedWans.get(port.wan_id);
+
+    if (!resolvedIp || rejectReason) {
+      if (rejectReason) {
+        log.warn('wan-public-ip: rejected poisoned probe IP; preserving last known ISP IP', {
+          wan: port.wan_name,
+          candidateIp: resolvedIp,
+          preservedIp: port.public_ip,
+          reason: rejectReason,
+        });
+      }
+      // Keep last known public_ip on transient probe blip or VPN/failover collision; only bump checked_at
+      updatePort.run({
+        wan_id: port.wan_id,
+        public_ip: port.public_ip,
+        checked_at: now,
+        changed_at: port.public_ip_changed_at,
+      });
+      result.set(port.wan_id, port.public_ip);
+      continue;
+    }
+
+    const changed = port.public_ip !== resolvedIp;
+    const changedAt = changed ? now : (port.public_ip_changed_at ?? now);
+    updatePort.run({
+      wan_id: port.wan_id,
+      public_ip: resolvedIp,
+      checked_at: now,
+      changed_at: changedAt,
+    });
+    result.set(port.wan_id, resolvedIp);
+
+    if (port.public_ip && port.public_ip !== resolvedIp) {
+      log.info('wan-public-ip: ISP public IP changed', {
+        wan: port.wan_name,
+        previousIp: port.public_ip,
+        publicIp: resolvedIp,
+      });
+      rotated.push({
+        wanId: port.wan_id,
+        wanName: port.wan_name,
+        previousIp: port.public_ip,
+        publicIp: resolvedIp,
+      });
+    }
+  }
 
   // Sync Cloudflare DNS-Only A records immediately (no-ops if CF_* env vars are absent)
   const ddnsResult = await syncCloudflareWanDns(

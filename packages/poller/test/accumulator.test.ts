@@ -4,7 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { Accumulator } from '../src/accumulator.js';
+import { RollupWorker } from '../src/rollup.js';
 import { estimateWifiDistanceMeters, extractWifiMetrics } from '../src/wifi-metrics.js';
+import { bucketDay } from '@tenda/shared';
 
 function makeDb(): Database.Database {
   const db = new Database(':memory:');
@@ -396,4 +398,102 @@ test('low post-zero flicker preserves high-water mark until the true counter ret
     ORDER BY ts DESC LIMIT 1
   `).get() as { down_sum_kb: number };
   assert.equal(latest.down_sum_kb, 263, 'stored sample keeps the high-water counter');
+});
+
+test('ignores Tenda 32-bit offline sentinel 2097151 and strips non-LAN external IP glitches', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  const mac = '3A:CB:5F:7D:4B:A7';
+
+  acc.process(1_000_000, [device(mac, { sumKb: 500_000, online: 1 })], false);
+  // Offline transition emitting INT32_MAX >> 10 = 2,097,151 KB and bogus external IP 17.57.156.25
+  const rOffline = acc.process(1_010_000, [{
+    ...device(mac, { sumKb: 2_097_151, online: 0 }),
+    hostIP: '17.57.156.25',
+  }], false);
+  assert.equal(rOffline.totalBytesDownDelta, 0, '2097151 sentinel must not credit 1.6 GB phantom traffic');
+
+  const rawRow = db.prepare(`SELECT ip, down_sum_kb FROM samples_raw WHERE mac = ? AND ts = 1010000`).get(mac) as any;
+  assert.equal(rawRow.ip, '192.168.0.10', 'external IP glitch falls back to last known valid LAN IP instead of storing 17.57.156.25');
+  assert.equal(rawRow.down_sum_kb, 500_000, 'offline sentinel preserves previous valid counter');
+
+  // Fresh unknown host with bogus external IP and no prior LAN IP stores null
+  acc.process(1_015_000, [{
+    ...device('BB:CC:DD:EE:FF:00', { sumKb: 100, online: 1 }),
+    hostIP: '108.159.102.127',
+  }], false);
+  const freshRow = db.prepare(`SELECT ip FROM samples_raw WHERE mac = 'BB:CC:DD:EE:FF:00'`).get() as any;
+  assert.equal(freshRow.ip, null, 'non-LAN IPv4 with no prior valid LAN IP must be stored as null');
+
+  // Reconnects with +100 KB real traffic
+  const rBack = acc.process(1_020_000, [device(mac, { sumKb: 500_100, online: 1 })], false);
+  assert.equal(rBack.totalBytesDownDelta, 100 * 1024);
+});
+
+test('strips local camera/repeater upload and bounds LAN camera hairpins to WAN flux ceiling', () => {
+  const db = makeDb();
+  const acc = new Accumulator(db);
+  const studioMac = 'AA:11:22:33:44:55';
+  const cameraMac = 'E0:CA:3C:67:03:A8'; // Hikvision OUI -> camera
+  const repeaterMac = '66:62:8B:B3:9F:52'; // Hall repeater proxy MAC
+
+  const wan = [
+    { id: 1, upBps: 200 * 1024, downBps: 1_000_000 },
+    { id: 2, upBps: 73 * 1024, downBps: 500_000 },
+  ]; // total WAN upload = 273 KB/s = 279,552 B/s
+
+  // Note: Tenda hostUploadSpeed is in integer KB/s
+  acc.process(1_000_000, [
+    device(studioMac, { sumKb: 1000, up: 552 }), // 273 KB/s WAN + 279 KB/s LAN Frigate stream
+    device(cameraMac, { sumKb: 50, up: 400 }),   // Pure local RTSP camera
+    device(repeaterMac, { sumKb: 5000, up: 300 }), // Hall repeater proxy
+  ], false, wan);
+
+  const r = acc.process(1_010_000, [
+    device(studioMac, { sumKb: 1100, up: 552 }),
+    device(cameraMac, { sumKb: 50, up: 400 }),
+    device(repeaterMac, { sumKb: 5200, up: 300 }),
+  ], false, wan);
+
+  // Camera + repeater upload must be 0, and studioMac upload over 10s must be capped to WAN (273 * 1024 * 10 = 2,795,520)
+  const expectedWanUpBytes = 273 * 1024 * 10;
+  assert.equal(r.totalBytesUpDelta, expectedWanUpBytes);
+  const camRow = db.prepare(`SELECT bytes_up FROM traffic_5min WHERE mac = ?`).get(cameraMac) as any;
+  const repRow = db.prepare(`SELECT bytes_up FROM traffic_5min WHERE mac = ?`).get(repeaterMac) as any;
+  const stuRow = db.prepare(`SELECT bytes_up FROM traffic_5min WHERE mac = ?`).get(studioMac) as any;
+  assert.equal(camRow.bytes_up, 0);
+  assert.equal(repRow.bytes_up, 0);
+  assert.equal(stuRow.bytes_up, expectedWanUpBytes);
+});
+
+test('RollupWorker.rollupDay replaces day rows idempotently without DST duplicate buckets', () => {
+  const db = makeDb();
+  db.exec(`
+    CREATE TABLE traffic_hour (mac TEXT, bucket_ts INTEGER, bytes_down INTEGER DEFAULT 0,
+      bytes_up INTEGER DEFAULT 0, active_sec INTEGER DEFAULT 0, peak_down_bps INTEGER, peak_up_bps INTEGER,
+      PRIMARY KEY (mac, bucket_ts));
+    CREATE TABLE traffic_day (mac TEXT, bucket_ts INTEGER, bytes_down INTEGER DEFAULT 0,
+      bytes_up INTEGER DEFAULT 0, active_sec INTEGER DEFAULT 0, peak_down_bps INTEGER, peak_up_bps INTEGER,
+      PRIMARY KEY (mac, bucket_ts));
+  `);
+
+  const summerNoon = new Date(2026, 6, 15, 12, 0, 0, 0).getTime(); // July 15
+  const winterNow = new Date(2026, 10, 15, 12, 0, 0, 0).getTime(); // Nov 15
+  const trueSummerMidnight = new Date(2026, 6, 15, 0, 0, 0, 0).getTime();
+  assert.equal(bucketDay(summerNoon), trueSummerMidnight);
+
+  // Simulate a stale shifted row (+1h) left from old DST-broken logic alongside true hour row
+  db.prepare(`INSERT INTO traffic_day (mac, bucket_ts, bytes_down, bytes_up, active_sec) VALUES (?, ?, 999999, 111111, 60)`)
+    .run('AA:00:00:00:00:01', trueSummerMidnight + 3_600_000);
+  db.prepare(`INSERT INTO traffic_hour (mac, bucket_ts, bytes_down, bytes_up, active_sec) VALUES (?, ?, 500000, 50000, 120)`)
+    .run('AA:00:00:00:00:01', summerNoon);
+
+  const worker = new RollupWorker(db);
+  worker.rollupDay(winterNow);
+
+  const rows = db.prepare(`SELECT bucket_ts, bytes_down, bytes_up FROM traffic_day WHERE mac = 'AA:00:00:00:00:01'`).all() as any[];
+  assert.equal(rows.length, 1, 'stale +1h DST duplicate bucket must be purged on rollupDay');
+  assert.equal(rows[0].bucket_ts, trueSummerMidnight);
+  assert.equal(rows[0].bytes_down, 500000);
+  assert.equal(rows[0].bytes_up, 50000);
 });

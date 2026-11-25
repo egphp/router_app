@@ -6,6 +6,7 @@ import { fetcher } from '../../lib/fetcher';
 import { formatMacShort, timeAgo } from '../../lib/format';
 import { useTableSort, sortNum, sortStr, SortHeader } from '../../lib/useTableSort';
 import { ShieldAlert, AlertOctagon, RefreshCw } from 'lucide-react';
+import { AskGeminiButton } from '../../components/AskGeminiButton';
 
 interface Entry {
   router_id: number; ts: number; log_type: number; message: string;
@@ -113,6 +114,14 @@ export default function AttacksPage() {
                   <AttackMetric label="Total" value={String(a.total_attacks)} tone="red" />
                   <AttackMetric label="Latest" value={timeAgo(a.latest_ts)} />
                 </div>
+                <div className="mt-2">
+                  <AskGeminiButton
+                    compact
+                    scopeType="attack"
+                    scopeKey={`atk-${a.mac}-${a.attack_kind}-${a.latest_ts}`}
+                    contextPayload={a as unknown as Record<string, unknown>}
+                  />
+                </div>
               </div>
             ))}
           </div>
@@ -136,6 +145,14 @@ export default function AttacksPage() {
                           className="font-medium hover:text-accent">{a.label}</Link>
                       ) : <span className="text-slate-500">unknown</span>}
                       <div className="text-[10px] text-slate-500">{a.ip} · {a.mac && formatMacShort(a.mac)}</div>
+                      <div className="mt-1.5">
+                        <AskGeminiButton
+                          compact
+                          scopeType="attack"
+                          scopeKey={`atk-${a.mac}-${a.attack_kind}-${a.latest_ts}`}
+                          contextPayload={a as unknown as Record<string, unknown>}
+                        />
+                      </div>
                     </td>
                     <td className="px-3 py-2">
                       <span className="text-xs px-2 py-0.5 rounded bg-accent-red/20 text-accent-red">{a.attack_kind}</span>

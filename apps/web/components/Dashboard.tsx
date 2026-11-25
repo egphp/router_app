@@ -12,8 +12,9 @@ import { CategoryBreakdown } from './CategoryBreakdown';
 import { TelemetryCard } from './TelemetryCard';
 import { TelemetryBar } from './TelemetryBar';
 import { WanQosOverview } from './WanQosOverview';
+import { AnomaliesCard } from './AnomaliesCard';
 import { formatBytes, formatDuration, categoryIcon } from '../lib/format';
-import { Activity, Download, Crown, GripVertical, RotateCcw, Lock, Unlock, PieChart } from 'lucide-react';
+import { Activity, Download, Crown, GripVertical, RotateCcw, Lock, Unlock, PieChart, Volume2, Loader2, Sparkles } from 'lucide-react';
 
 interface TopDevice { mac: string; label: string; bytes_down: number; bytes_up: number }
 interface Status {
@@ -134,14 +135,9 @@ export function Dashboard() {
   const todayUp = status?.bytes_today_up ?? 0;
   const wanDown = status?.wan_today_down ?? 0;
   const wanUp = status?.wan_today_up ?? 0;
+  const wanComplete = Boolean(status?.wan_today_complete && (wanDown > 0 || wanUp > 0));
   const wanSince = status?.wan_first_sample_ts
     ? new Date(status.wan_first_sample_ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : null;
-  // Diagnostic: how closely does the device-level upload estimate match the
-  // independent WAN counter? Close to 100% means the per-device numbers are
-  // reliable; a wide gap suggests one side is off.
-  const wanMatchPct = wanUp > 0
-    ? Math.round(100 * Math.min(todayUp, wanUp) / Math.max(todayUp, wanUp))
     : null;
 
   return (
@@ -150,6 +146,7 @@ export function Dashboard() {
       <NsfwBanner />
       <AlertBanner />
       <TelemetryBar />
+      <SpokenBriefBar />
       <WanQosOverview />
 
       {/* Fixed status row — always first, not reorderable. Stats on left, Live Speed on right */}
@@ -163,19 +160,18 @@ export function Dashboard() {
             tone={status?.connected ? 'mint' : 'coral'}
           />
           <StatCard
-            label="Today · download"
-            value={formatBytes(todayDown)}
+            label={wanComplete ? 'Today · Internet (WAN)' : 'Today · download'}
+            value={formatBytes(wanComplete ? wanDown : todayDown)}
             hint={
-              wanMatchPct !== null
-                ? `↑ ${formatBytes(todayUp)} up · matches WAN ${wanMatchPct}%`
-                : `↑ ${formatBytes(todayUp)} up · WAN ↓ ${formatBytes(wanDown)}`
+              wanComplete
+                ? `↑ ${formatBytes(wanUp)} up · devices ↓ ${formatBytes(todayDown)}`
+                : `↑ ${formatBytes(todayUp)} up${wanDown > 0 ? ` · WAN ↓ ${formatBytes(wanDown)}` : ''}`
             }
             icon={<Download size={16} strokeWidth={2.2} />}
             tone="peach"
             title={
-              `Download is the per-device counter reported by the router page (resets when a device reconnects).\n` +
-              `Upload is integrated from instant speed samples; we cross-check the per-device sum against the independent WAN counter.\n` +
-              `WAN observed${wanSince ? ` since ${wanSince}` : ''}: ↓ ${formatBytes(wanDown)} · ↑ ${formatBytes(wanUp)}.`
+              `Internet WAN1 + WAN2${wanSince ? ` (since ${wanSince})` : ''}: ↓ ${formatBytes(wanDown)} · ↑ ${formatBytes(wanUp)}.\n` +
+              `Client devices (excluding local cameras & repeaters): ↓ ${formatBytes(todayDown)} · ↑ ${formatBytes(todayUp)}.`
             }
           />
           <TopDevicesCard top={status?.top_device ?? null} second={status?.top_device_2 ?? null} />
@@ -238,6 +234,95 @@ export function Dashboard() {
           </div>
         );
       })}
+      <AnomaliesCard />
+    </div>
+  );
+}
+
+function SpokenBriefBar() {
+  const [loading, setLoading] = useState(false);
+  const [scriptAr, setScriptAr] = useState<string | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const playBrief = async () => {
+    if (playing && audioRef.current) {
+      audioRef.current.pause();
+      setPlaying(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const resp = await fetch('/api/ai/brief-tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ withAudio: true }),
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.ok) return;
+      setScriptAr(json.scriptAr || null);
+
+      if (json.audioBase64) {
+        const bin = atob(json.audioBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: json.mimeType || 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audio.onended = () => {
+          setPlaying(false);
+          URL.revokeObjectURL(url);
+        };
+        setPlaying(true);
+        await audio.play().catch(() => setPlaying(false));
+      } else if (typeof window !== 'undefined' && 'speechSynthesis' in window && json.scriptAr) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(json.scriptAr);
+        utter.lang = 'ar-EG';
+        utter.onend = () => setPlaying(false);
+        setPlaying(true);
+        window.speechSynthesis.speak(utter);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      dir="rtl"
+      className="card px-4 py-3 flex items-center justify-between gap-3 flex-wrap animate-fade-in"
+    >
+      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+        <Sparkles size={15} style={{ color: '#8bb2ff' }} className="shrink-0" />
+        <div className="min-w-0 text-xs" style={{ color: 'rgba(247,248,248,.9)', lineHeight: 1.6 }}>
+          {scriptAr ? (
+            <span dir="auto">{scriptAr}</span>
+          ) : (
+            <span style={{ color: 'rgba(180,188,208,.75)' }}>
+              النشرة الصوتية الذكية (١٥ ثانية): اضغط للاستماع لملخص حالة الشبكة وسرعة الخطين والتنبيهات الآن.
+            </span>
+          )}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        disabled={loading}
+        onClick={() => void playBrief()}
+        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50"
+        style={{
+          background: playing ? 'rgba(63,178,127,.14)' : 'rgba(91,141,239,.12)',
+          color: playing ? '#3fb27f' : '#8bb2ff',
+          boxShadow: playing
+            ? 'inset 0 0 0 1px rgba(63,178,127,.32)'
+            : 'inset 0 0 0 1px rgba(91,141,239,.32)',
+        }}
+      >
+        {loading ? <Loader2 size={13} className="animate-spin" /> : <Volume2 size={13} />}
+        <span>{playing ? 'إيقاف الصوت' : 'ملخص صوتي (١٥ ث)'}</span>
+      </button>
     </div>
   );
 }

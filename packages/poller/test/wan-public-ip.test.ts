@@ -14,6 +14,7 @@ import {
   SshLocalRelay,
   WAN1_PROBE_ENDPOINTS,
   WAN2_PROBE_ENDPOINTS,
+  evaluateSshSelfHeal,
   getSshAccessConfig,
   loadCloudflareDdnsConfigFromEnv,
   parseCloudflareTraceIp,
@@ -892,4 +893,187 @@ test('syncCloudflareWanDns supports tokenless ssh-relay mode so CF_API_TOKEN nev
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('evaluateSshSelfHeal detects missing ssh_wan2 Multi-WAN route rule even when port mappings exist, and skips WAN2 checks while Single-WAN', () => {
+  const sshCfg = { enabled: true, targetIp: '192.168.0.7', externalPort: 22222, sshUser: 'michaeltawfik' };
+  const vips = resolveSymmetricSshVips('192.168.0.7', new Set(['192.168.0.7', '192.168.0.241', '192.168.0.242']));
+  const mappings = [
+    { id: 1, wanId: 1, serverIp: '192.168.0.241', internalPort: 22, externalPort: 22222, protocol: 1, enabled: true },
+    { id: 4, wanId: 2, serverIp: '192.168.0.242', internalPort: 22, externalPort: 22222, protocol: 1, enabled: true },
+  ];
+
+  // Missing ssh_wan2 route rule while both WANs are active -> must trigger self-heal!
+  const missingWan2Route = evaluateSshSelfHeal({
+    sshCfg,
+    vips,
+    mappings,
+    wanBindings: [{ ip: '192.168.0.241', wanPort: 'WAN1', ruleEnabled: true }],
+    wanRoutePolicy: 'custom',
+    activeWanIds: new Set([1, 2]),
+  });
+  assert.equal(missingWan2Route.needsRepair, true);
+  assert.deepEqual(missingWan2Route.reasons, ['missing_wan2_route_binding']);
+
+  // While WAN2 is absent (Single-WAN), do NOT trigger futile WAN2 repairs
+  const singleWan = evaluateSshSelfHeal({
+    sshCfg,
+    vips,
+    mappings: [mappings[0]!],
+    wanBindings: [{ ip: '192.168.0.241', wanPort: 'WAN1', ruleEnabled: true }],
+    wanRoutePolicy: 'custom',
+    activeWanIds: new Set([1]),
+  });
+  assert.equal(singleWan.needsRepair, false);
+
+  // When policy drifts away from custom -> trigger self-heal
+  const driftedPolicy = evaluateSshSelfHeal({
+    sshCfg,
+    vips,
+    mappings,
+    wanBindings: [
+      { ip: '192.168.0.241', wanPort: 'WAN1', ruleEnabled: true },
+      { ip: '192.168.0.242', wanPort: 'WAN2', ruleEnabled: true },
+    ],
+    wanRoutePolicy: 'auto',
+    activeWanIds: new Set([1, 2]),
+  });
+  assert.equal(driftedPolicy.needsRepair, true);
+  assert.deepEqual(driftedPolicy.reasons, ['wan_route_policy_not_custom']);
+
+  // Both mappings + both symmetric route bindings + custom policy -> healthy, no repair needed
+  const healthy = evaluateSshSelfHeal({
+    sshCfg,
+    vips,
+    mappings,
+    wanBindings: [
+      { ip: '192.168.0.241', wanPort: 'WAN1', ruleEnabled: true },
+      { ip: '192.168.0.242', wanPort: 'WAN2', ruleEnabled: true },
+    ],
+    wanRoutePolicy: 'custom',
+    activeWanIds: new Set([1, 2]),
+  });
+  assert.equal(healthy.needsRepair, false);
+  assert.deepEqual(healthy.reasons, []);
+});
+
+test('probeWanPublicIps and syncCloudflareWanDns reject VPN exit-IP and WAN-failover duplicate IP poisoning', async () => {
+  const db = createTestDb();
+  const router = new MockWanSshRouterClient();
+  const t0 = 1_700_300_000_000;
+
+  syncTrafficControlToDb(
+    db,
+    {
+      qosPolicy: 2,
+      wanRoutePolicyType: 'custom',
+      wanPorts: [
+        { wanId: 1, wanName: 'WAN1', status: 'wired', wanType: 'static', wanIp: '192.168.3.13', wanGateway: '192.168.3.1', upFluxBps: 100, downFluxBps: 200 },
+        { wanId: 2, wanName: 'WAN2', status: 'wired', wanType: 'static', wanIp: '192.168.2.17', wanGateway: '192.168.2.1', upFluxBps: 50, downFluxBps: 100 },
+      ],
+      qosDevices: [],
+      wanBindings: [],
+    },
+    t0,
+  );
+
+  const relayCfg = loadCloudflareDdnsConfigFromEnv({
+    CF_DDNS_SSH_HOST: 'relay-box',
+    CF_DDNS_REMOTE_SCRIPT: '/opt/secrets/ddns_sync.php',
+    CF_DDNS_WAN1_FQDN: 'w1-guard.example.net',
+    CF_DDNS_WAN2_FQDN: 'w2-guard.example.net',
+  });
+
+  const sshCalls: Array<{ fqdn: string; ip: string }> = [];
+  const mockSshExec = async (_h: string, _s: string, fqdn: string, ip: string) => {
+    sshCalls.push({ fqdn, ip });
+    return { ok: true as const };
+  };
+
+  // Baseline: distinct valid ISP IPs
+  await probeWanPublicIps(db, router, {
+    now: t0 + 1000,
+    httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.10.91' : '156.196.164.93'),
+    dnsProbeFn: async () => null,
+    ddnsConfig: relayCfg,
+    ddnsSshExecFn: mockSshExec,
+  });
+  assert.equal(sshCalls.length, 2);
+
+  // Case 1: Host activates VPN -> both WAN1 & WAN2 probes return identical VPN exit IP 78.46.74.89
+  sshCalls.length = 0;
+  const vpnRes = await probeWanPublicIps(db, router, {
+    now: t0 + 60_000,
+    httpsProbeFn: async () => '78.46.74.89',
+    dnsProbeFn: async () => null,
+    ddnsConfig: relayCfg,
+    ddnsSshExecFn: mockSshExec,
+  });
+  assert.equal(vpnRes.get(1), '156.196.10.91');
+  assert.equal(vpnRes.get(2), '156.196.164.93');
+  assert.equal(sshCalls.length, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM alerts WHERE kind = 'wan_ip_changed'`).get()?.['c' as never], 0);
+
+  // Case 2: WAN2 fails over onto WAN1 -> both return WAN1's IP 156.196.10.91
+  sshCalls.length = 0;
+  const failoverRes = await probeWanPublicIps(db, router, {
+    now: t0 + 120_000,
+    httpsProbeFn: async () => '156.196.10.91',
+    dnsProbeFn: async () => null,
+    ddnsConfig: relayCfg,
+    ddnsSshExecFn: mockSshExec,
+  });
+  assert.equal(failoverRes.get(1), '156.196.10.91');
+  assert.equal(failoverRes.get(2), '156.196.164.93');
+  assert.equal(sshCalls.length, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM alerts WHERE kind = 'wan_ip_changed'`).get()?.['c' as never], 0);
+
+  // Case 3: WAN2 recovers from null while still failing over onto WAN1 -> WAN2 stays null, never poisoned with WAN1 IP
+  db.prepare(`UPDATE router_wan_ports SET public_ip = NULL WHERE wan_id = 2`).run();
+  sshCalls.length = 0;
+  const recoverFailover = await probeWanPublicIps(db, router, {
+    now: t0 + 180_000,
+    httpsProbeFn: async () => '156.196.10.91',
+    dnsProbeFn: async () => null,
+    ddnsConfig: relayCfg,
+    ddnsSshExecFn: mockSshExec,
+  });
+  assert.equal(recoverFailover.get(1), '156.196.10.91');
+  assert.equal(recoverFailover.get(2), null);
+  assert.equal(sshCalls.length, 0);
+
+  // Case 4: WAN2 gets its real distinct ISP IP 156.196.249.82 -> immediately updates DB and syncs w2 DDNS
+  sshCalls.length = 0;
+  const recovered = await probeWanPublicIps(db, router, {
+    now: t0 + 240_000,
+    httpsProbeFn: async (ip) => (ip === WAN1_PROBE_ENDPOINTS.httpsIp ? '156.196.10.91' : '156.196.249.82'),
+    dnsProbeFn: async () => null,
+    ddnsConfig: relayCfg,
+    ddnsSshExecFn: mockSshExec,
+  });
+  assert.equal(recovered.get(1), '156.196.10.91');
+  assert.equal(recovered.get(2), '156.196.249.82');
+  assert.deepEqual(sshCalls, [{ fqdn: 'w2-guard.example.net', ip: '156.196.249.82' }]);
+
+  // Case 5: Defense-in-depth in syncCloudflareWanDns refuses duplicate DB public_ip rows
+  db.prepare(`UPDATE router_wan_ports SET public_ip = '156.196.10.91' WHERE wan_id = 2`).run();
+  sshCalls.length = 0;
+  const ddnsGuard = await syncCloudflareWanDns(db, relayCfg, {
+    now: t0 + 300_000,
+    force: true,
+    sshExecFn: mockSshExec,
+  });
+  assert.equal(sshCalls.length, 0);
+  assert.equal(ddnsGuard.updated.get(2)?.ok, false);
+  assert.match(ddnsGuard.updated.get(2)?.error ?? '', /Refused duplicate public IP/);
+});
+
+test('getPortMappings throwOnError distinguishes transient fetch failures from an empty router table', async () => {
+  const router = new MockWanSshRouterClient();
+  router.call = async () => {
+    throw new TypeError('fetch failed');
+  };
+  const silent = await router.getPortMappings();
+  assert.deepEqual(silent, []);
+  await assert.rejects(() => router.getPortMappings({ throwOnError: true }), /fetch failed/);
 });

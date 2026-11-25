@@ -1,7 +1,13 @@
 import net from 'node:net';
 import type Database from 'better-sqlite3';
 import {
+  PiiSessionSanitizer,
+  isAiReady,
   isAic8800FallbackMac,
+  isLocallyAdministeredMac,
+  lookupOui,
+  resolveGeminiApiKey,
+  scoreNewDeviceTrust,
   type NewDeviceAutoQosConfig,
   type RouterDevice,
   type RouterQosDeviceLimit,
@@ -758,4 +764,121 @@ export function markDeviceAutoQosReviewed(db: Database.Database, mac: string, no
         updated_at = ?
     WHERE mac = ? AND state IN ('pending', 'applied')
   `).run(now, now, macUp);
+}
+
+/**
+ * Scores a newly quarantined device via `gemini-decision-1` (or deterministic local fallback)
+ * and stores its recommended post-review QoS/WAN profile in `ai_device_profiles`.
+ */
+export async function evaluateNewDeviceTrustWithAi(
+  db: Database.Database,
+  mac: string,
+  now = Date.now(),
+): Promise<void> {
+  const macUp = mac.trim().toUpperCase();
+  if (!macUp || !hasTable(db, 'ai_device_profiles')) return;
+
+  const dev = db
+    .prepare(`
+      SELECT d.mac, d.hostname, d.router_remark, d.vendor, d.category,
+             (SELECT s.wifi_band FROM samples_raw s WHERE s.mac = d.mac ORDER BY s.ts DESC LIMIT 1) AS wifi_band,
+             (SELECT s.connection_kind FROM samples_raw s WHERE s.mac = d.mac ORDER BY s.ts DESC LIMIT 1) AS conn_kind
+      FROM devices d WHERE d.mac = ?
+    `)
+    .get(macUp) as {
+    mac: string;
+    hostname: string | null;
+    router_remark: string | null;
+    vendor: string | null;
+    category: string | null;
+    wifi_band: string | null;
+    conn_kind: string | null;
+  } | undefined;
+  if (!dev) return;
+
+  const oui = lookupOui(macUp);
+  const randomized = isLocallyAdministeredMac(macUp);
+  const vendor = dev.vendor && dev.vendor !== 'Unknown' ? dev.vendor : oui.vendor;
+  const category = dev.category ?? oui.category ?? null;
+
+  let trustTier = 'guest_unknown';
+  let qosProfile = 'sd';
+  let recDown = 256;
+  let recUp = 64;
+  let recWan: number | null = null;
+  let confidence = 0.7;
+  let rationaleAr = 'يبقى الجهاز تحت سقف SD التلقائي لحين مراجعة المالك.';
+
+  if (isAiReady(db, 'profiler')) {
+    const { apiKey } = resolveGeminiApiKey(db);
+    if (apiKey) {
+      try {
+        const sanitizer = new PiiSessionSanitizer(db);
+        const payload = sanitizer.sanitizeValue({
+          vendor,
+          category,
+          randomizedMac: randomized,
+          wifiBand: dev.wifi_band,
+          connectionKind: dev.conn_kind,
+        });
+        const scored = await scoreNewDeviceTrust(apiKey, JSON.stringify(payload));
+        trustTier = scored.trustTier;
+        qosProfile = scored.recommendedQosProfile;
+        recDown = scored.recommendedDownKbs;
+        recUp = scored.recommendedUpKbs;
+        recWan = scored.recommendedWan;
+        confidence = scored.confidence;
+        rationaleAr = scored.rationaleAr;
+      } catch {
+        // Fall through to deterministic heuristic below
+      }
+    }
+  }
+
+  if (confidence === 0.7) {
+    if (category === 'computer' || category === 'nas') {
+      trustTier = 'trusted_personal';
+      qosProfile = 'unlimited';
+      recDown = 0;
+      recUp = 0;
+      recWan = 1;
+      rationaleAr = 'حاسوب/خادم عمل — يُقترح فتح السرعة الكاملة بعد تأكيد الهوية.';
+    } else if (category === 'tv' || category === 'console') {
+      trustTier = 'home_media';
+      qosProfile = 'hd';
+      recDown = 2048;
+      recUp = 512;
+      recWan = 2;
+      rationaleAr = 'جهاز شاشة/ألعاب — يُقترح بروفايل HD وتوجيهه إلى WAN2 لحماية الباقة.';
+    } else if (category === 'camera' || category === 'iot' || category === 'printer') {
+      trustTier = 'iot_restricted';
+      qosProfile = 'sd';
+      recDown = 256;
+      recUp = 64;
+      rationaleAr = 'كاميرا أو إنترنت أشياء — إبقاء قيد SD يحمي سعة الرفع على الراوتر.';
+    } else if (!randomized && (category === 'phone' || category === 'tablet')) {
+      trustTier = 'trusted_personal';
+      qosProfile = 'unlimited';
+      recDown = 0;
+      recUp = 0;
+      rationaleAr = 'هاتف شخصي بعنوان ثابت — يمكن فتح سرعته بعد الاعتماد.';
+    }
+  }
+
+  db.prepare(`
+    INSERT INTO ai_device_profiles (
+      mac, inferred_category, trust_tier, recommended_qos_profile,
+      recommended_down_kbs, recommended_up_kbs, recommended_wan, trust_confidence, rationale_ar, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(mac) DO UPDATE SET
+      inferred_category = COALESCE(ai_device_profiles.inferred_category, excluded.inferred_category),
+      trust_tier = excluded.trust_tier,
+      recommended_qos_profile = excluded.recommended_qos_profile,
+      recommended_down_kbs = excluded.recommended_down_kbs,
+      recommended_up_kbs = excluded.recommended_up_kbs,
+      recommended_wan = excluded.recommended_wan,
+      trust_confidence = excluded.trust_confidence,
+      rationale_ar = excluded.rationale_ar,
+      updated_at = excluded.updated_at
+  `).run(macUp, category, trustTier, qosProfile, recDown, recUp, recWan, confidence, rationaleAr, now);
 }

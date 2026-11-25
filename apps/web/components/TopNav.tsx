@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
   Bell, AlertTriangle, Cog, LayoutDashboard, ListTree, BarChart3, Shield,
-  Receipt, Calendar, ShieldAlert, Network, Download, Menu, X, Lock,
+  Receipt, Calendar, ShieldAlert, Network, Download, Menu, X, Lock, Sparkles,
 } from 'lucide-react';
 import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import useSWR from 'swr';
@@ -142,6 +142,22 @@ export function TopNav() {
                 </span>
               </Link>
             )}
+
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('tenda:open-copilot'))}
+                title="فتح مساعد الشبكة الذكي (⌘K / Ctrl+K)"
+                className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium transition hover:opacity-90"
+                style={{
+                  background: 'rgba(91,141,239,.12)',
+                  color: '#8bb2ff',
+                  boxShadow: 'inset 0 0 0 1px rgba(91,141,239,.32)',
+                }}
+              >
+                <Sparkles size={14} />
+                <span className="hidden md:inline">AI</span>
+                <kbd className="hidden lg:inline text-[10px] opacity-75 font-mono">⌘K</kbd>
+              </button>
 
               <button
                 type="button"

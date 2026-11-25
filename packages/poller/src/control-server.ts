@@ -20,6 +20,8 @@ import {
   setSshAccessConfig,
   syncPortMappingsToDb,
 } from './wan-public-ip.js';
+import { applyProposedRouterAction } from './ai-action-executor.js';
+import type { QosScheduleRunner } from './qos-scheduler.js';
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -33,6 +35,7 @@ export function startControlServer(
   repoRoot: string,
   sampler?: Sampler,
   db?: Database.Database,
+  qosScheduler?: QosScheduleRunner,
 ): http.Server {
   const envPath = path.resolve(repoRoot, '.env');
 
@@ -187,6 +190,7 @@ export function startControlServer(
         const mappings = await router.getPortMappings();
         syncPortMappingsToDb(db, mappings);
         if (sampler) {
+          await sampler.refreshTrafficControls().catch((e) => log.debug('post-ssh-access traffic-controls refresh skipped', String(e)));
           await sampler.reconcileSshRelay(mappings);
         }
         res.end(JSON.stringify({ ok: true, sshAccess, applied }));
@@ -341,6 +345,27 @@ export function startControlServer(
           dhcp: dhcpResult,
           state,
         }));
+        return;
+      }
+      if (req.url === '/ai/apply-action' && req.method === 'POST') {
+        if (!db) {
+          res.statusCode = 503;
+          res.end(JSON.stringify({ ok: false, error: 'Database handle unavailable' }));
+          return;
+        }
+        const body = await readJson(req);
+        const result = await applyProposedRouterAction(db, router, sampler, body as any);
+        if (!result.ok) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, error: result.error ?? 'Failed to apply action' }));
+          return;
+        }
+        res.end(JSON.stringify({ ok: true, summaryAr: result.summaryAr }));
+        return;
+      }
+      if (req.url === '/ai/qos-schedules/tick' && req.method === 'POST') {
+        const out = qosScheduler ? await qosScheduler.tick() : { applied: 0, reverted: 0 };
+        res.end(JSON.stringify({ ok: true, ...out }));
         return;
       }
       res.statusCode = 404;

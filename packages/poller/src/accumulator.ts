@@ -1,13 +1,34 @@
 import type Database from 'better-sqlite3';
 import type { RouterDevice } from '@tenda/shared';
 import { bucket5Min } from '@tenda/shared';
-import { insertAlertIfAllowed, lookupOui, categorizeByName, isAic8800FallbackMac } from '@tenda/shared';
+import {
+  insertAlertIfAllowed,
+  lookupOui,
+  categorizeByName,
+  isAic8800FallbackMac,
+  isLocalInfraCategory,
+} from '@tenda/shared';
 import { log } from './logger.js';
-import { enqueueNewDeviceForAutoQos } from './traffic-control.js';
+import { enqueueNewDeviceForAutoQos, isValidLanIpv4 } from './traffic-control.js';
 import { extractWifiMetrics } from './wifi-metrics.js';
+
+const TENDA_INT32_MAX_KB_SENTINEL = 2_097_151; // 0x7fffffff >> 10
+const TENDA_UINT32_MAX_KB_SENTINEL = 4_194_303; // 0xffffffff >> 10
+
+export function isTendaCounterSentinelKb(kb: number): boolean {
+  return kb === TENDA_INT32_MAX_KB_SENTINEL || kb === TENDA_UINT32_MAX_KB_SENTINEL || kb < 0;
+}
+
+function sanitizeRouterHostIp(rawIp: string | null | undefined, fallbackIp?: string | null): string | null {
+  const clean = (rawIp ?? '').trim();
+  if (clean && isValidLanIpv4(clean)) return clean;
+  const fb = (fallbackIp ?? '').trim();
+  return fb && isValidLanIpv4(fb) ? fb : null;
+}
 
 interface PrevSample {
   ts: number;
+  ip?: string | null;
   online: 0 | 1;
   up_speed_bps: number;
   down_speed_bps: number;
@@ -37,6 +58,7 @@ export class Accumulator {
   private findCanonicalByReservedIp: Database.Statement | null = null;
   private insertAlert: Database.Statement;
   private ephemeralPrev = new Map<string, PrevSample>();
+  private prevWanSnapshot: { ts: number; upBps: number; downBps: number } | null = null;
 
   constructor(private readonly db: Database.Database) {
     this.upsertDevice = db.prepare(`
@@ -44,15 +66,23 @@ export class Accumulator {
       VALUES (@mac, @router_id, @hostname, @router_remark, @vendor, @category, @first_seen, @last_seen, 1, @now, @now)
       ON CONFLICT(mac) DO UPDATE SET
         router_id = excluded.router_id,
-        hostname  = COALESCE(excluded.hostname, devices.hostname),
-        router_remark = COALESCE(excluded.router_remark, devices.router_remark),
-        vendor    = COALESCE(devices.vendor, excluded.vendor),
-        category  = COALESCE(devices.category, excluded.category),
+        hostname  = COALESCE(NULLIF(excluded.hostname, ''), devices.hostname),
+        router_remark = COALESCE(NULLIF(excluded.router_remark, ''), devices.router_remark),
+        vendor    = CASE
+          WHEN devices.vendor IS NULL OR TRIM(devices.vendor) = '' OR LOWER(TRIM(devices.vendor)) = 'unknown'
+          THEN COALESCE(NULLIF(excluded.vendor, ''), devices.vendor)
+          ELSE devices.vendor
+        END,
+        category  = CASE
+          WHEN devices.category IS NULL OR TRIM(devices.category) = '' OR LOWER(TRIM(devices.category)) = 'unknown'
+          THEN COALESCE(NULLIF(excluded.category, ''), devices.category)
+          ELSE devices.category
+        END,
         last_seen = excluded.last_seen,
         updated_at = excluded.updated_at
     `);
 
-    this.fetchDevice = db.prepare(`SELECT mac FROM devices WHERE mac = ?`);
+    this.fetchDevice = db.prepare(`SELECT mac, category FROM devices WHERE mac = ?`);
     this.touchDeviceLastSeen = db.prepare(`UPDATE devices SET last_seen = MAX(last_seen, ?), updated_at = ? WHERE mac = ?`);
     this.findCanonicalBySampleIp = db.prepare(`
       SELECT d.mac
@@ -91,7 +121,7 @@ export class Accumulator {
     `);
 
     this.lastSample = db.prepare(`
-      SELECT ts, online, up_speed_bps, down_speed_bps, down_sum_kb, online_seconds
+      SELECT ts, ip, online, up_speed_bps, down_speed_bps, down_sum_kb, online_seconds
       FROM samples_raw
       WHERE mac = ? AND ts < ?
       ORDER BY ts DESC
@@ -265,12 +295,56 @@ export class Accumulator {
   }
 
   /** Process one polling cycle. */
-  process(now: number, devices: RouterDevice[], isReboot: boolean): AccumulateResult {
+  process(
+    now: number,
+    devices: RouterDevice[],
+    isReboot: boolean,
+    wanFlux?: Array<{ id: number; upBps: number; downBps: number }>,
+  ): AccumulateResult {
     const newDevices: string[] = [];
     let totalDown = 0;
     let totalUp = 0;
 
+    // Pre-compute WAN tick upload ceiling when router WAN flux is provided simultaneously
+    let wanTickUpCeilingBytes: number | null = null;
+    if (Array.isArray(wanFlux) && wanFlux.length > 0) {
+      const curWanUpBps = wanFlux.reduce((s, w) => s + Math.max(0, Number(w.upBps ?? 0)), 0);
+      const curWanDownBps = wanFlux.reduce((s, w) => s + Math.max(0, Number(w.downBps ?? 0)), 0);
+      if (this.prevWanSnapshot && now > this.prevWanSnapshot.ts && now - this.prevWanSnapshot.ts <= 5 * 60_000) {
+        const wanDtSec = Math.max(1, Math.round((now - this.prevWanSnapshot.ts) / 1000));
+        wanTickUpCeilingBytes = Math.round(((this.prevWanSnapshot.upBps + curWanUpBps) / 2) * wanDtSec);
+      }
+      this.prevWanSnapshot = { ts: now, upBps: curWanUpBps, downBps: curWanDownBps };
+    }
+
+    interface PreparedDeviceRow {
+      dev: RouterDevice;
+      mac: string;
+      isNew: boolean;
+      oui: ReturnType<typeof lookupOui>;
+      guessedCategory: string | null;
+      isOnline: boolean;
+      cleanIp: string | null;
+      upSpeed: number;
+      downSpeed: number;
+      downSumKb: number;
+      sessions: number;
+      onlineMinutes: number;
+      onlineSecondsForStorage: number;
+      wifi: ReturnType<typeof extractWifiMetrics>;
+      prev: PrevSample | undefined;
+      dtSec: number;
+      gapTooLarge: boolean;
+      sessionRestarted: boolean;
+      deltaDownBytes: number;
+      sessionCounterBaseKb: number;
+      candidateUpBytes: number;
+      isLocalCameraOrBridge: boolean;
+    }
+
     const txn = this.db.transaction(() => {
+      const prepared: PreparedDeviceRow[] = [];
+
       for (const dev of devices) {
         const mac = (dev.hostMAC || '').toUpperCase();
         if (!mac) continue;
@@ -278,15 +352,20 @@ export class Accumulator {
         if (isAic8800FallbackMac(mac)) {
           const eph = this.processEphemeralFallback(now, mac, dev, devices, isReboot);
           totalDown += eph.deltaDownBytes;
-          totalUp += eph.deltaUpBytes;
+          totalUp += wanTickUpCeilingBytes !== null ? 0 : eph.deltaUpBytes;
           continue;
         }
 
-        const isNew = this.isUnknownDevice(mac);
+        const existingDev = this.fetchDevice.get(mac) as { mac: string; category: string | null } | undefined;
+        const isNew = !existingDev;
         if (isNew) newDevices.push(mac);
 
         const oui = lookupOui(mac);
-        const guessedCategory = categorizeByName(dev.hostName) ?? oui.category ?? null;
+        const guessedCategory = categorizeByName(dev.hostName) ?? categorizeByName(dev.hostRemark) ?? oui.category ?? null;
+        const effectiveCategory =
+          existingDev?.category && existingDev.category !== 'unknown'
+            ? existingDev.category
+            : guessedCategory;
 
         this.upsertDevice.run({
           mac,
@@ -301,28 +380,28 @@ export class Accumulator {
         });
 
         const isOnline = dev.hostOnlineStatus === 1;
+        const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
+        const cleanIp = sanitizeRouterHostIp(dev.hostIP, prev?.ip);
+
         // Tenda firmware reports hostUploadSpeed/hostDownloadSpeed as integer KB/s.
-        // Store the canonical bytes/s in the DB (legacy column name says "_bps" but means bytes/s).
         const upKBs = isOnline ? Number((dev as any).hostUploadSpeed ?? 0) : 0;
         const downKBs = isOnline ? Number((dev as any).hostDownloadSpeed ?? 0) : 0;
         const upSpeed = Math.round(upKBs * 1024);
         const downSpeed = Math.round(downKBs * 1024);
-        const rawDownSumKb = Number(dev.hostDownloadSum ?? 0);
+
+        let rawDownSumKb = Number(dev.hostDownloadSum ?? 0);
+        // Filter Tenda 32-bit INT32/UINT32 overflow/offline sentinels (2097151 / 4194303)
+        // and ignore counter mutations while the host is marked offline.
+        if (isTendaCounterSentinelKb(rawDownSumKb) || (!isOnline && prev)) {
+          rawDownSumKb = prev ? prev.down_sum_kb : 0;
+        }
+
         const sessions = isOnline ? Number((dev as any).hostConnectCount ?? 0) : 0;
-        // Tenda firmware reports `onlineTime` in MINUTES since the device's
-        // current session started — the integer ticks once per wall-clock minute.
-        // We persist it as `online_seconds` (multiplied by 60 on the way in) so
-        // downstream comparisons stay in a single unit. Verified empirically: in
-        // 10 minutes of wall clock, the field increments by ~10.
         const onlineMinutes = isOnline ? Number((dev as any).onlineTime ?? 0) : 0;
         const onlineSecondsForStorage = onlineMinutes * 60;
         const wifi = extractWifiMetrics(dev);
 
-        const prev = this.lastSample.get(mac, now) as PrevSample | undefined;
         const dtSec = prev ? Math.max(1, Math.round((now - prev.ts) / 1000)) : 30;
-        // If we lost contact for more than 5 min, distrust the per-device counter delta —
-        // the router may have rebooted, the device may have reconnected, or our poller
-        // restarted. In all those cases the gap is too long to safely credit as one delta.
         const gapTooLarge = dtSec > 5 * 60;
         const reconnected = Boolean(prev && prev.online === 0 && isOnline);
         const uptimeReset = Boolean(
@@ -337,9 +416,6 @@ export class Accumulator {
         let counterNoise = false;
         let realCounterReset = false;
         if (prev && !isReboot && !gapTooLarge && rawDownSumKb < prev.down_sum_kb) {
-          // Tenda firmware can report a transient 0 or tiny post-zero value for the same
-          // session. Keep the stored counter at the high-water mark so the next normal
-          // sample is not credited a second time.
           if (sessionRestarted) {
             realCounterReset = true;
           } else {
@@ -348,132 +424,186 @@ export class Accumulator {
           }
         }
 
+        const maxLineKbs = Math.max(25_600, Math.round(((prev?.down_speed_bps ?? 0) + downSpeed) / 2048) * 4);
+        const maxPlausibleTickKb = Math.max(64 * 1024, maxLineKbs * dtSec);
+
         let deltaDownBytes = 0;
+        let rebaselinedStaleReset = false;
         if (!prev) {
-          // First sample for this device — treat the router's running counter as a baseline,
-          // not as bytes accumulated during our watch. Future deltas will be relative to this.
           deltaDownBytes = 0;
         } else if (isReboot) {
-          // Router rebooted: the new down_sum_kb starts fresh from 0; whatever it shows now is
-          // bytes since reboot, so add them all.
-          deltaDownBytes = downSumKb * 1024;
+          if (downSumKb <= maxPlausibleTickKb) {
+            deltaDownBytes = downSumKb * 1024;
+          } else {
+            deltaDownBytes = Math.round((((prev.down_speed_bps ?? 0) + downSpeed) / 2) * dtSec);
+            rebaselinedStaleReset = true;
+          }
         } else if (gapTooLarge) {
-          // Long gap without a confirmed reboot: re-baseline silently to avoid double-counting.
           log.info('accumulator: long gap, re-baselining device counter', { mac, dtSec, prevKb: prev.down_sum_kb, curKb: downSumKb });
           deltaDownBytes = 0;
         } else if (counterNoise) {
           deltaDownBytes = 0;
         } else if (realCounterReset) {
-          log.info('accumulator: per-device session counter reset (treating as real)', {
-            mac,
-            prevKb: prev.down_sum_kb,
-            curKb: downSumKb,
-            prevOnlineSec: prev.online_seconds,
-            curOnlineSec: onlineSecondsForStorage,
-          });
-          deltaDownBytes = downSumKb * 1024;
+          if (downSumKb <= maxPlausibleTickKb) {
+            log.info('accumulator: per-device session counter reset (treating as real)', {
+              mac,
+              prevKb: prev.down_sum_kb,
+              curKb: downSumKb,
+              prevOnlineSec: prev.online_seconds,
+              curOnlineSec: onlineSecondsForStorage,
+            });
+            deltaDownBytes = downSumKb * 1024;
+          } else {
+            log.warn('accumulator: implausible post-reset counter carry-over; re-baselining', {
+              mac,
+              prevKb: prev.down_sum_kb,
+              curKb: downSumKb,
+              dtSec,
+            });
+            deltaDownBytes = Math.round((((prev.down_speed_bps ?? 0) + downSpeed) / 2) * dtSec);
+            rebaselinedStaleReset = true;
+          }
         } else {
           const rawDeltaKb = downSumKb - prev.down_sum_kb;
-          if (rawDeltaKb > 5 * 1024 * 1024) {
-            // Sanity cap: > 5 GB in one short cycle is implausible for a home network.
+          if (rawDeltaKb > 5 * 1024 * 1024 || (dtSec <= 90 && rawDeltaKb > Math.max(512 * 1024, maxPlausibleTickKb * 2))) {
             log.warn('accumulator: implausible delta clamped', { mac, rawDeltaKb, dtSec });
-            deltaDownBytes = 0;
+            deltaDownBytes = Math.round((((prev.down_speed_bps ?? 0) + downSpeed) / 2) * dtSec);
           } else {
             deltaDownBytes = rawDeltaKb * 1024;
           }
         }
-        const seedSessionFromCounter = !sessionRestarted || isReboot || realCounterReset;
+
+        const seedSessionFromCounter = (!sessionRestarted || isReboot || realCounterReset) && !rebaselinedStaleReset;
         const sessionCounterBaseKb = seedSessionFromCounter
           ? 0
-          : Math.max(0, Number(prev?.down_sum_kb ?? downSumKb));
+          : Math.max(0, rebaselinedStaleReset ? downSumKb : Number(prev?.down_sum_kb ?? downSumKb));
 
-        // Upload bytes are estimated from instantaneous KB/s × elapsed time, because the
-        // Tenda W30E firmware does not expose hostUploadSum. We use min(prevUp, upSpeed)
-        // as a conservative lower-bound estimator: trapezoidal/mean integration was
-        // overshooting because a single high sample (a burst peak captured at sample
-        // time) gets extrapolated over the full sample interval. Min-of-pair gives a
-        // safe estimate that matches WAN ground truth much more closely.
-        let deltaUpBytes = 0;
+        const isLocalCameraOrBridge =
+          isLocalInfraCategory(effectiveCategory) || mac.startsWith('66:62:8B:');
+
+        let candidateUpBytes = 0;
         if (prev && !gapTooLarge && isOnline) {
           const prevUp = prev.up_speed_bps;
-          deltaUpBytes = Math.round(Math.min(prevUp, upSpeed) * dtSec);
-        }
-        // Sanity cap: bytes/sec must not exceed the higher endpoint by more than 10%.
-        const upBoundBytesPerSec = Math.max(prev?.up_speed_bps ?? 0, upSpeed);
-        const maxBytesThisCycle = Math.round(upBoundBytesPerSec * dtSec * 1.1);
-        if (deltaUpBytes > maxBytesThisCycle) {
-          deltaUpBytes = maxBytesThisCycle;
-        }
-        if (deltaUpBytes > 5 * 1024 * 1024 * 1024) {
-          log.warn('accumulator: implausible up delta clamped', { mac, deltaUpBytes, dtSec });
-          deltaUpBytes = 0;
+          if (wanTickUpCeilingBytes !== null) {
+            candidateUpBytes = isLocalCameraOrBridge ? 0 : Math.round(((prevUp + upSpeed) / 2) * dtSec);
+          } else {
+            candidateUpBytes = Math.round(Math.min(prevUp, upSpeed) * dtSec);
+          }
+          const upBoundBytesPerSec = Math.max(prevUp, upSpeed);
+          const maxBytesThisCycle = Math.round(upBoundBytesPerSec * dtSec * 1.1);
+          if (candidateUpBytes > maxBytesThisCycle) {
+            candidateUpBytes = maxBytesThisCycle;
+          }
+          if (candidateUpBytes > 5 * 1024 * 1024 * 1024) {
+            candidateUpBytes = 0;
+          }
         }
 
-        this.updateSession(
+        prepared.push({
+          dev,
           mac,
-          now,
+          isNew,
+          oui,
+          guessedCategory,
           isOnline,
+          cleanIp,
+          upSpeed,
+          downSpeed,
+          downSumKb,
+          sessions,
           onlineMinutes,
+          onlineSecondsForStorage,
+          wifi,
+          prev,
+          dtSec,
+          gapTooLarge,
           sessionRestarted,
           deltaDownBytes,
-          deltaUpBytes,
-          downSumKb,
           sessionCounterBaseKb,
+          candidateUpBytes,
+          isLocalCameraOrBridge,
+        });
+      }
+
+      // Scale total client upload down to true WAN upload ceiling whenever LAN/camera hairpins exceed WAN flux
+      const sumCandidateUp = prepared.reduce((s, r) => s + r.candidateUpBytes, 0);
+      const upScale =
+        wanTickUpCeilingBytes !== null && sumCandidateUp > wanTickUpCeilingBytes && sumCandidateUp > 0
+          ? wanTickUpCeilingBytes / sumCandidateUp
+          : 1;
+
+      for (const row of prepared) {
+        const deltaUpBytes = Math.max(0, Math.round(row.candidateUpBytes * upScale));
+        const deltaDownBytes =
+          row.isLocalCameraOrBridge && wanTickUpCeilingBytes !== null && row.mac.startsWith('66:62:8B:')
+            ? 0
+            : row.deltaDownBytes;
+
+        this.updateSession(
+          row.mac,
+          now,
+          row.isOnline,
+          row.onlineMinutes,
+          row.sessionRestarted,
+          deltaDownBytes,
+          deltaUpBytes,
+          row.downSumKb,
+          row.sessionCounterBaseKb,
         );
 
         this.insertSample.run({
-          mac,
+          mac: row.mac,
           ts: now,
-          ip: dev.hostIP || null,
-          online: isOnline ? 1 : 0,
-          up_speed_bps: upSpeed,
-          down_speed_bps: downSpeed,
-          down_sum_kb: downSumKb,
-          sessions,
-          online_seconds: onlineSecondsForStorage,
-          connect_type: wifi.connectType,
-          connection_kind: wifi.connectionKind,
-          wifi_band: wifi.wifiBand,
-          wifi_rssi_dbm: wifi.wifiRssiDbm,
-          wifi_signal_percent: wifi.wifiSignalPercent,
-          wifi_distance_m: wifi.wifiDistanceM,
-          wifi_distance_source: wifi.wifiDistanceSource,
+          ip: row.cleanIp,
+          online: row.isOnline ? 1 : 0,
+          up_speed_bps: row.upSpeed,
+          down_speed_bps: row.downSpeed,
+          down_sum_kb: row.downSumKb,
+          sessions: row.sessions,
+          online_seconds: row.onlineSecondsForStorage,
+          connect_type: row.wifi.connectType,
+          connection_kind: row.wifi.connectionKind,
+          wifi_band: row.wifi.wifiBand,
+          wifi_rssi_dbm: row.wifi.wifiRssiDbm,
+          wifi_signal_percent: row.wifi.wifiSignalPercent,
+          wifi_distance_m: row.wifi.wifiDistanceM,
+          wifi_distance_source: row.wifi.wifiDistanceSource,
         });
 
         const bucket = bucket5Min(now);
-        const activeSec = prev && !gapTooLarge && isOnline ? dtSec : 0;
+        const activeSec = row.prev && !row.gapTooLarge && row.isOnline ? row.dtSec : 0;
         this.upsertBucket.run({
-          mac,
+          mac: row.mac,
           bucket_ts: bucket,
           bytes_down: Math.max(0, deltaDownBytes),
           bytes_up: Math.max(0, deltaUpBytes),
-          speed_down: downSpeed,
-          speed_up: upSpeed,
+          speed_down: row.downSpeed,
+          speed_up: row.upSpeed,
           active_sec: activeSec,
         });
 
         totalDown += deltaDownBytes;
         totalUp += deltaUpBytes;
 
-        if (isNew) {
+        if (row.isNew) {
           enqueueNewDeviceForAutoQos(
             this.db,
-            mac,
-            Math.max(0, Math.round(Number((dev as any).hostDownloadLimit ?? 0) || 0)),
-            Math.max(0, Math.round(Number((dev as any).hostUploadLimit ?? 0) || 0)),
+            row.mac,
+            Math.max(0, Math.round(Number((row.dev as any).hostDownloadLimit ?? 0) || 0)),
+            Math.max(0, Math.round(Number((row.dev as any).hostUploadLimit ?? 0) || 0)),
             now,
           );
-          insertAlertIfAllowed(this.db, 'new_device', mac, {
-            mac,
-            hostname: dev.hostName,
-            ip: dev.hostIP,
-            vendor: oui.vendor,
-            category: guessedCategory,
-            router_id: dev.ID,
-            router_remark: dev.hostRemark || null,
-            connect_type: wifi.connectType,
-            connection_kind: wifi.connectionKind,
-            wifi_band: wifi.wifiBand,
+          insertAlertIfAllowed(this.db, 'new_device', row.mac, {
+            mac: row.mac,
+            hostname: row.dev.hostName,
+            ip: row.cleanIp,
+            vendor: row.oui.vendor,
+            category: row.guessedCategory,
+            router_id: row.dev.ID,
+            router_remark: row.dev.hostRemark || null,
+            connect_type: row.wifi.connectType,
+            connection_kind: row.wifi.connectionKind,
+            wifi_band: row.wifi.wifiBand,
           }, now);
         }
       }

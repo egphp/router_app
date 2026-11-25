@@ -27,9 +27,13 @@ export function bucketHour(ts: number): number {
   return Math.floor(ts / HOUR) * HOUR;
 }
 
-export function bucketDay(ts: number, tzOffsetMin = new Date().getTimezoneOffset()): number {
-  const off = tzOffsetMin * MIN;
-  return Math.floor((ts - off) / DAY) * DAY + off;
+export function bucketDay(ts: number, tzOffsetMin?: number): number {
+  if (typeof tzOffsetMin === 'number' && Number.isFinite(tzOffsetMin)) {
+    const off = tzOffsetMin * MIN;
+    return Math.floor((ts - off) / DAY) * DAY + off;
+  }
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
 export function bucketMonth(ts: number): number {

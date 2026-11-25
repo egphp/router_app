@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<evaluation>
+  <qa_pair>
+    <question>Check the live Tenda router overview and report how many WAN ports are configured in router_wan_ports.</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Using tenda_query_readonly_sql, confirm whether reading the restricted `settings` table is blocked (`blocked`) or allowed (`allowed`).</question>
+    <answer>blocked</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Using tenda_list_devices with category="tv", inspect the Smart TV devices and check whether QoS speed limits are returned in KB/s (`KB/s`) or Mbps (`Mbps`).</question>
+    <answer>KB/s</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Run tenda_get_quota_forecast in JSON format and report the default billing renewal day integer (`renewalDay`) when no custom billing day is overridden.</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Using tenda_diagnose_anomalies_and_outages, check the SQLite telemetry integrity section and report the field name that counts 48-hour raw router samples.</question>
+    <answer>rawSamples48h</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Query the `ai_device_profiles` schema via tenda_query_readonly_sql (`SELECT * FROM ai_device_profiles LIMIT 1`) or tool schema summary and state the column name used to store the Arabic explanation rationale.</question>
+    <answer>rationale_ar</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Attempt a read-only SQL query joining `devices` and `dhcp_reservations` to count how many static DHCP reservations currently have a valid IPv4 address, returning the integer count.</question>
+    <answer>0</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Inspect the `tenda_set_device_control` tool schema and report the maximum allowed integer value for `download_limit_kbs`.</question>
+    <answer>38400</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Using `tenda_get_device_detail` in JSON mode on an existing device, report the property path under `last24h` that distinguishes LAN-only Frigate/NAS transfers from internet WAN traffic.</question>
+    <answer>lanOrWanAttribution</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Check the valid enum options for `wan_port` in `tenda_set_device_control` besides `WAN1` and `WAN2` that restores automatic Dual-WAN load balancing.</question>
+    <answer>auto</answer>
+  </qa_pair>
+</evaluation>

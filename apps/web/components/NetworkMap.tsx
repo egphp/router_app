@@ -2,9 +2,30 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import { fetcher } from '../lib/fetcher';
 import { formatBps, categoryIcon } from '../lib/format';
+import { Sparkles, Check, Loader2, Play, ChevronDown, ChevronRight } from 'lucide-react';
+import type { ProposedActionClient } from './AskGeminiButton';
+
+interface AdvisoryResponse {
+  ok: boolean;
+  wanFindings: Array<{
+    severity: 'info' | 'warn' | 'action_needed';
+    titleAr: string;
+    detailAr: string;
+    action?: ProposedActionClient;
+  }>;
+  wifiFindings: Array<{
+    severity: 'info' | 'warn';
+    mac: string;
+    label: string;
+    band: string | null;
+    rssiDbm: number | null;
+    distanceM: number | null;
+    adviceAr: string;
+  }>;
+}
 
 interface DeviceRow {
   mac: string;
@@ -75,6 +96,33 @@ export function NetworkMap() {
       keepPreviousData: true,
     },
   );
+  const { data: advisoryData, mutate: mutateAdvisory } = useSWR<AdvisoryResponse>(
+    mapPollingEnabled ? '/api/ai/advisory' : null,
+    fetcher,
+    { refreshInterval: mapPollingEnabled ? 45000 : 0, keepPreviousData: true },
+  );
+  const { mutate: globalMutate } = useSWRConfig();
+  const [advisorOpen, setAdvisorOpen] = useState(true);
+  const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [appliedMap, setAppliedMap] = useState<Record<string, string>>({});
+
+  const applyWanAction = async (act: ProposedActionClient) => {
+    setApplyingId(act.id);
+    try {
+      const resp = await fetch('/api/ai/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(act),
+      });
+      const json = await resp.json().catch(() => null);
+      if (resp.ok && json?.ok) {
+        setAppliedMap((s) => ({ ...s, [act.id]: json.summaryAr || 'تم التثبيت' }));
+        await Promise.all([mutateAdvisory(), globalMutate('/api/devices?live=1')]);
+      }
+    } finally {
+      setApplyingId(null);
+    }
+  };
 
   const devices = useMemo(() => (devData?.devices ?? []).filter((d) => d.online === 1), [devData]);
   const attackerSet = useMemo(() => {
@@ -122,9 +170,116 @@ export function NetworkMap() {
   }, [devices]);
 
   const measuredCount = nodes.filter((d) => d.hasMeasuredDistance).length;
+  const wanFindings = advisoryData?.wanFindings ?? [];
+  const wifiFindings = advisoryData?.wifiFindings ?? [];
+  const totalAdvisorFindings = wanFindings.length + wifiFindings.length;
 
   return (
-    <div className="card p-5 animate-fade-in">
+    <div className="card p-5 animate-fade-in space-y-3">
+      {totalAdvisorFindings > 0 && (
+        <div
+          dir="rtl"
+          className="rounded-xl p-3.5 space-y-2.5"
+          style={{
+            background: '#111114',
+            boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.08)',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setAdvisorOpen((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 text-right"
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles size={14} style={{ color: '#8bb2ff' }} />
+              <span className="text-xs font-semibold" style={{ color: '#f7f8f8' }}>
+                مستشار الشبكة اللاسلكية وخطوط <bdi>WAN1 / WAN2</bdi> ({totalAdvisorFindings} ملاحظة)
+              </span>
+            </div>
+            {advisorOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+
+          {advisorOpen && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 pt-1">
+              {wanFindings.map((wf, idx) => (
+                <div
+                  key={`wan-${idx}`}
+                  className="rounded-lg p-2.5 flex items-center justify-between gap-2 flex-wrap text-xs"
+                  style={{
+                    background: '#17171b',
+                    boxShadow:
+                      wf.severity === 'action_needed'
+                        ? 'inset 0 0 0 1px rgba(244,103,107,.30)'
+                        : wf.severity === 'warn'
+                        ? 'inset 0 0 0 1px rgba(227,160,8,.28)'
+                        : 'inset 0 0 0 1px rgba(255,255,255,.07)',
+                  }}
+                >
+                  <div className="space-y-0.5 min-w-0 flex-1">
+                    <div className="font-medium" style={{ color: '#f7f8f8' }} dir="auto">
+                      {wf.titleAr}
+                    </div>
+                    <div style={{ color: 'rgba(180,188,208,.75)', lineHeight: 1.55 }} dir="auto">
+                      {wf.detailAr}
+                    </div>
+                  </div>
+                  {wf.action && (
+                    <div className="shrink-0">
+                      {appliedMap[wf.action.id] ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium" style={{ color: '#3fb27f' }}>
+                          <Check size={12} />
+                          <span>{appliedMap[wf.action.id]}</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={applyingId === wf.action.id}
+                          onClick={() => void applyWanAction(wf.action!)}
+                          className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium"
+                          style={{
+                            background: 'rgba(91,141,239,.14)',
+                            color: '#8bb2ff',
+                            boxShadow: 'inset 0 0 0 1px rgba(91,141,239,.35)',
+                          }}
+                        >
+                          {applyingId === wf.action.id ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+                          <span>{wf.action.labelAr}</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {wifiFindings.slice(0, 6).map((wf) => (
+                <div
+                  key={`wifi-${wf.mac}`}
+                  className="rounded-lg p-2.5 text-xs space-y-0.5"
+                  style={{
+                    background: '#17171b',
+                    boxShadow:
+                      wf.severity === 'warn'
+                        ? 'inset 0 0 0 1px rgba(227,160,8,.28)'
+                        : 'inset 0 0 0 1px rgba(91,141,239,.25)',
+                  }}
+                >
+                  <div className="font-medium flex items-center justify-between gap-2" style={{ color: '#f7f8f8' }}>
+                    <bdi>{wf.label}</bdi>
+                    <span className="tabular-nums text-[11px]" style={{ color: 'rgba(180,188,208,.7)' }}>
+                      <bdi>
+                        {wf.band || 'Wi-Fi'}
+                        {wf.rssiDbm !== null ? ` · ${wf.rssiDbm} dBm` : ''}
+                      </bdi>
+                    </span>
+                  </div>
+                  <div style={{ color: 'rgba(180,188,208,.8)', lineHeight: 1.55 }}>{wf.adviceAr}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="stat-label mb-3">
         Network map · {devices.length} online devices · RSSI distance {measuredCount}/{devices.length}
       </div>

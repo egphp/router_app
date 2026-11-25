@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import {
   DAY,
   HOUR,
+  computeProactiveQuotaForecast,
   getDeviceThresholds,
   getThresholdConfig,
   insertAlertIfAllowed,
@@ -35,6 +36,44 @@ export class ThresholdAlertMonitor {
         cfg.deviceDefaultLimitBytes,
         deviceThresholds,
       );
+    }
+    this.checkProactiveQuotaBurn(now);
+  }
+
+  private checkProactiveQuotaBurn(now: number): void {
+    try {
+      const forecast = computeProactiveQuotaForecast(this.db, now);
+      if (!forecast.willExhaustBeforeRenewal) return;
+      const maxShortfall = Math.max(
+        forecast.wans[0]?.daysShortfall ?? 0,
+        forecast.wans[1]?.daysShortfall ?? 0,
+        forecast.daysUntilCombinedExhaustion !== null
+          ? forecast.daysRemainingInCycle - forecast.daysUntilCombinedExhaustion
+          : 0,
+      );
+      if (maxShortfall < 1.5) return;
+      const weekBucket = Math.floor(now / (3 * DAY));
+      const stateKey = `quota_burn_warning|${forecast.cycleStartTs}|${weekBucket}`;
+      if (!markNotificationState(this.db, stateKey, forecast.projectedCycleTotalBytes, now)) return;
+      insertAlertIfAllowed(
+        this.db,
+        'total_download_threshold',
+        null,
+        {
+          rule: 'proactive_quota_burn_warning',
+          period: 'month',
+          bytes_down: forecast.networkUsedDownBytes,
+          bytes_up: forecast.networkUsedUpBytes,
+          bytes_total: forecast.networkUsedTotalBytes,
+          projected_bytes: forecast.projectedCycleTotalBytes,
+          threshold_bytes: forecast.combinedQuotaBytes,
+          days_shortfall: Number(maxShortfall.toFixed(1)),
+          message: forecast.summaryAr,
+        },
+        now,
+      );
+    } catch (e) {
+      log.debug('proactive quota burn check skipped', String(e));
     }
   }
 

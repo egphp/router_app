@@ -811,7 +811,7 @@ export class RouterClient {
       // Case A: Single-IP group already exists with the desired name.
       if (singleIpGroup && singleIpGroup.IPGroupName === desiredGroupName) {
         if (existingRule) {
-          await this.call(['setWanRouteRules'], {
+          const editResp = await this.call<{ setWanRouteRules?: number }>(['setWanRouteRules'], {
             setWanRouteRules: {
               type: 'edit',
               data: {
@@ -822,11 +822,18 @@ export class RouterClient {
               },
             },
           });
+          if (editResp.setWanRouteRules !== undefined && Number(editResp.setWanRouteRules) !== 0) {
+            return {
+              ok: false,
+              code: 'ROUTER_REJECTED_WAN_RULE',
+              error: `Router rejected editing WAN rule for ${ip} -> ${targetWan} (code ${editResp.setWanRouteRules}).`,
+            };
+          }
           log.info('router: updated single-WAN binding', { ip, group: desiredGroupName, wanPort: targetWan });
           return { ok: true, applied: { ip, wanPort: targetWan, ipGroupName: desiredGroupName } };
         }
 
-        await this.call(['setWanRouteRules'], {
+        const addResp = await this.call<{ setWanRouteRules?: number }>(['setWanRouteRules'], {
           setWanRouteRules: {
             type: 'add',
             data: {
@@ -836,6 +843,13 @@ export class RouterClient {
             },
           },
         });
+        if (addResp.setWanRouteRules !== undefined && Number(addResp.setWanRouteRules) !== 0) {
+          return {
+            ok: false,
+            code: 'ROUTER_REJECTED_WAN_RULE',
+            error: `Router rejected adding WAN rule for ${ip} -> ${targetWan} (code ${addResp.setWanRouteRules}).`,
+          };
+        }
         log.info('router: added single-WAN rule for existing IP group', { ip, group: desiredGroupName, wanPort: targetWan });
         return { ok: true, applied: { ip, wanPort: targetWan, ipGroupName: desiredGroupName } };
       }
@@ -879,7 +893,7 @@ export class RouterClient {
           });
         }
 
-        await this.call(['setWanRouteRules'], {
+        const addRuleResp = await this.call<{ setWanRouteRules?: number }>(['setWanRouteRules'], {
           setWanRouteRules: {
             type: 'add',
             data: {
@@ -889,6 +903,13 @@ export class RouterClient {
             },
           },
         });
+        if (addRuleResp.setWanRouteRules !== undefined && Number(addRuleResp.setWanRouteRules) !== 0) {
+          return {
+            ok: false,
+            code: 'ROUTER_REJECTED_WAN_RULE',
+            error: `Router rejected adding WAN rule for ${ip} -> ${targetWan} (code ${addRuleResp.setWanRouteRules}).`,
+          };
+        }
         log.info('router: renamed IP group and updated single-WAN binding', { ip, group: desiredGroupName, wanPort: targetWan });
         return { ok: true, applied: { ip, wanPort: targetWan, ipGroupName: desiredGroupName } };
       }
@@ -905,7 +926,7 @@ export class RouterClient {
         },
       });
 
-      await this.call(['setWanRouteRules'], {
+      const addNewRuleResp = await this.call<{ setWanRouteRules?: number }>(['setWanRouteRules'], {
         setWanRouteRules: {
           type: 'add',
           data: {
@@ -915,6 +936,13 @@ export class RouterClient {
           },
         },
       });
+      if (addNewRuleResp.setWanRouteRules !== undefined && Number(addNewRuleResp.setWanRouteRules) !== 0) {
+        return {
+          ok: false,
+          code: 'ROUTER_REJECTED_WAN_RULE',
+          error: `Router rejected adding WAN rule for ${ip} -> ${targetWan} (code ${addNewRuleResp.setWanRouteRules}).`,
+        };
+      }
 
       log.info('router: added single-WAN binding', { ip, group: desiredGroupName, wanPort: targetWan });
       return { ok: true, applied: { ip, wanPort: targetWan, ipGroupName: desiredGroupName } };
@@ -1007,7 +1035,7 @@ export class RouterClient {
    * Read Tenda W30E TCP/UDP port mapping rules (`controlers/portMapping.js`).
    * Note firmware field typo `porMappingtInternal` and 0-based `portMappingWan` (`0` = WAN1, `1` = WAN2).
    */
-  async getPortMappings(): Promise<RouterPortMappingRule[]> {
+  async getPortMappings(opts?: { throwOnError?: boolean }): Promise<RouterPortMappingRule[]> {
     try {
       const r = await this.call<{ getPortMapping?: Array<Record<string, unknown>> }>(
         ['getPortMapping'],
@@ -1027,6 +1055,9 @@ export class RouterClient {
         .filter((pm) => pm.id > 0 && pm.serverIp.length > 0);
     } catch (e) {
       log.warn('router.getPortMappings failed', String(e));
+      if (opts?.throwOnError) {
+        throw e;
+      }
       return [];
     }
   }
@@ -1064,17 +1095,29 @@ export class RouterClient {
     if (isValidLanIpv4(ip) && isValidLanIpv4(wan1Ip) && isValidLanIpv4(wan2Ip)) {
       if (opts.enabled) {
         if (wan1Ip !== ip) {
-          await this.setDeviceWanBinding({ ip: wan1Ip, groupName: 'ssh_wan1', wanPort: 'WAN1' });
+          const b1 = await this.setDeviceWanBinding({ ip: wan1Ip, groupName: 'ssh_wan1', wanPort: 'WAN1' });
+          if (!b1.ok) {
+            log.warn('router: failed to pin SSH WAN1 VIP binding', { ip: wan1Ip, code: b1.code, error: b1.error });
+          }
         }
         if (wan2Ip !== ip) {
-          await this.setDeviceWanBinding({ ip: wan2Ip, groupName: 'ssh_wan2', wanPort: 'WAN2' });
+          const b2 = await this.setDeviceWanBinding({ ip: wan2Ip, groupName: 'ssh_wan2', wanPort: 'WAN2' });
+          if (!b2.ok) {
+            log.warn('router: failed to pin SSH WAN2 VIP binding', { ip: wan2Ip, code: b2.code, error: b2.error });
+          }
         }
       } else {
         if (wan1Ip !== ip || defaultWan1Vip !== ip) {
-          await this.setDeviceWanBinding({ ip: wan1Ip !== ip ? wan1Ip : defaultWan1Vip, wanPort: 'auto' });
+          const u1 = await this.setDeviceWanBinding({ ip: wan1Ip !== ip ? wan1Ip : defaultWan1Vip, wanPort: 'auto' });
+          if (!u1.ok) {
+            log.warn('router: failed to clear SSH WAN1 VIP binding', { ip: wan1Ip, code: u1.code, error: u1.error });
+          }
         }
         if (wan2Ip !== ip || defaultWan2Vip !== ip) {
-          await this.setDeviceWanBinding({ ip: wan2Ip !== ip ? wan2Ip : defaultWan2Vip, wanPort: 'auto' });
+          const u2 = await this.setDeviceWanBinding({ ip: wan2Ip !== ip ? wan2Ip : defaultWan2Vip, wanPort: 'auto' });
+          if (!u2.ok) {
+            log.warn('router: failed to clear SSH WAN2 VIP binding', { ip: wan2Ip, code: u2.code, error: u2.error });
+          }
         }
       }
     }

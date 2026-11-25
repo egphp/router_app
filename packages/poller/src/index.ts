@@ -8,6 +8,7 @@ import { startControlServer } from './control-server.js';
 import { SyslogServer } from './syslog-server.js';
 import { TelegramNotifier } from './telegram-notifier.js';
 import { EnrichmentWorker } from './enrichment.js';
+import { QosScheduleRunner } from './qos-scheduler.js';
 import { log } from './logger.js';
 
 function resolveRepoRoot(): string {
@@ -29,19 +30,24 @@ async function main() {
   const router = new RouterClient(cfg.routerHost, cfg.routerPassword);
   const ipc = new IpcBroadcaster(cfg.ipcSocket);
   const sampler = new Sampler(db, router, ipc, cfg.pollIntervalMs);
+  const qosScheduler = new QosScheduleRunner(db, router, async () => {
+    await sampler.refreshTrafficControls();
+  });
 
   const controlPort = Number(process.env.CONTROL_PORT ?? 3031);
-  const controlServer = startControlServer(controlPort, router, resolveRepoRoot(), sampler, db);
+  const controlServer = startControlServer(controlPort, router, resolveRepoRoot(), sampler, db, qosScheduler);
 
   const syslogPort = Number(process.env.SYSLOG_PORT ?? 514);
   const syslog = new SyslogServer(db, syslogPort);
   syslog.start();
 
-  const tg = new TelegramNotifier(db);
-  const tgTimer = setInterval(() => { tg.tick().catch((e) => log.warn('tg.tick error', String(e))); }, 60_000);
+  const tg = new TelegramNotifier(db, router, sampler);
+  tg.startInteractiveLoop();
+  const tgTimer = setInterval(() => { tg.tick().catch((e) => log.warn('tg.tick error', String(e))); }, 45_000);
 
   const enrichment = new EnrichmentWorker(db);
   enrichment.start();
+  qosScheduler.start();
 
   if (!cfg.routerPassword) {
     log.warn('ROUTER_PASSWORD not set — control server ready for onboarding, sampler idle until credentials saved');
@@ -67,8 +73,10 @@ async function main() {
     controlServer.close();
     syslog.stop();
     clearInterval(tgTimer);
+    tg.stopInteractiveLoop();
     clearInterval(credentialWatcher);
     enrichment.stop();
+    qosScheduler.stop();
     process.exit(0);
   };
   process.on('SIGINT', () => shutdown('SIGINT'));

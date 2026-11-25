@@ -5,6 +5,7 @@ import { TopNav } from '../components/TopNav';
 import { PrivacyMask } from '../components/PrivacyMask';
 import { AutoReloadOnUpdate } from '../components/AutoReloadOnUpdate';
 import { PushActivation } from '../components/PushActivation';
+import { TendaCopilotDrawer } from '../components/TendaCopilotDrawer';
 
 const fontDisplay = Fraunces({
   subsets: ['latin'],
@@ -44,6 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AutoReloadOnUpdate />
         <PushActivation />
         <TopNav />
+        <TendaCopilotDrawer />
         <main className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 xl:px-8 py-4 sm:py-5 lg:py-6">{children}</main>
       </body>
     </html>

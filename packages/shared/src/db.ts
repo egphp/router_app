@@ -2,10 +2,23 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from './config.js';
+import { loadConfig, resolveRepoRoot } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function resolveMigrationsDir(): string {
+  const repoRoot = resolveRepoRoot();
+  const candidates = [
+    path.resolve(__dirname, 'migrations'),
+    path.resolve(repoRoot, 'packages/shared/dist/migrations'),
+    path.resolve(repoRoot, 'packages/shared/src/migrations'),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) return dir;
+  }
+  return candidates[0]!;
+}
 
 let _db: Database.Database | null = null;
 
@@ -32,7 +45,7 @@ export function closeDb(): void {
 
 export function runMigrations(targetDb?: Database.Database): void {
   const db = targetDb ?? getDb();
-  const migrationsDir = path.resolve(__dirname, 'migrations');
+  const migrationsDir = resolveMigrationsDir();
   const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort();
   db.exec(`CREATE TABLE IF NOT EXISTS _migrations (file TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`);
   const applied = new Set(db.prepare(`SELECT file FROM _migrations`).all().map((r: any) => r.file));

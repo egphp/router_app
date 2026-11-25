@@ -17,7 +17,7 @@ function serviceWorkerSource(version: string): string {
   return `
 const SW_VERSION = ${JSON.stringify(version)};
 const CACHE_PREFIX = 'tenda-v';
-const ASSETS_CACHE = CACHE_PREFIX + 'assets';
+const ASSETS_CACHE = CACHE_PREFIX + 'assets-mark-2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

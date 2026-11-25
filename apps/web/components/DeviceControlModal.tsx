@@ -48,6 +48,19 @@ export interface ControllableDevice {
   wan_group_name?: string | null;
   wan_inherited_range?: 0 | 1;
   auto_qos_state?: 'pending' | 'applied' | 'reviewed' | 'skipped' | null;
+  os_guess?: string | null;
+  reverse_dns?: string | null;
+  device_type?: string | null;
+  ai_suggested_label?: string | null;
+  ai_inferred_category?: string | null;
+  ai_trust_tier?: string | null;
+  ai_recommended_qos_profile?: string | null;
+  ai_recommended_down_kbs?: number | null;
+  ai_recommended_up_kbs?: number | null;
+  ai_recommended_wan?: string | null;
+  ai_randomized_match_mac?: string | null;
+  ai_randomized_similarity?: number | null;
+  ai_rationale_ar?: string | null;
 }
 
 interface NetworkControlData {
@@ -292,6 +305,108 @@ export function DeviceControlPanel({
               {dlKbs === 0 && ulKbs === 0 ? 'Unlimited' : `↓ ${dlKbs || '∞'} · ↑ ${ulKbs || '∞'} KB/s`}
             </span>
           </div>
+        </div>
+      )}
+
+      {/* AI Behavioral Profile, OS Guess & Randomized-MAC Match */}
+      {(device.ai_trust_tier || device.os_guess || device.ai_randomized_match_mac || device.ai_rationale_ar) && (
+        <div
+          dir="rtl"
+          className="rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          style={{
+            background: '#17171b',
+            boxShadow: 'inset 0 0 0 1px rgba(91,141,239,.28)',
+          }}
+        >
+          <div className="space-y-1 text-xs min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Sparkles size={14} style={{ color: '#8bb2ff' }} />
+              <span className="font-semibold" style={{ color: '#f7f8f8' }}>
+                بصمة الجهاز الذكية وتوصية السرعة
+              </span>
+              {device.os_guess && (
+                <span
+                  className="rounded px-2 py-0.5 text-[11px] font-medium"
+                  style={{
+                    background: 'rgba(255,255,255,.05)',
+                    color: 'rgba(180,188,208,.85)',
+                    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.10)',
+                  }}
+                >
+                  <bdi>{device.os_guess}</bdi>
+                </span>
+              )}
+              {device.ai_trust_tier && (
+                <span
+                  className="rounded px-2 py-0.5 text-[11px] font-medium"
+                  style={{
+                    background: 'rgba(91,141,239,.10)',
+                    color: '#8bb2ff',
+                    boxShadow: 'inset 0 0 0 1px rgba(91,141,239,.28)',
+                  }}
+                >
+                  <bdi>{device.ai_trust_tier}</bdi>
+                </span>
+              )}
+              {device.ai_randomized_match_mac && (
+                <span
+                  className="rounded px-2 py-0.5 text-[11px] font-medium tabular-nums"
+                  style={{
+                    background: 'rgba(227,160,8,.09)',
+                    color: '#e3a008',
+                    boxShadow: 'inset 0 0 0 1px rgba(227,160,8,.28)',
+                  }}
+                >
+                  يطابق سلوك <bdi>{device.ai_randomized_match_mac.slice(-8)}</bdi>{' '}
+                  {device.ai_randomized_similarity
+                    ? `(${Math.round(device.ai_randomized_similarity * 100)}%)`
+                    : ''}
+                </span>
+              )}
+            </div>
+            {device.ai_rationale_ar && (
+              <div style={{ color: 'rgba(180,188,208,.8)', lineHeight: 1.6 }} dir="auto">
+                {device.ai_rationale_ar}
+              </div>
+            )}
+          </div>
+
+          {device.ai_recommended_down_kbs !== null &&
+            device.ai_recommended_down_kbs !== undefined &&
+            device.ai_recommended_up_kbs !== null &&
+            device.ai_recommended_up_kbs !== undefined && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  submitControl({
+                    dl: device.ai_recommended_down_kbs ?? 0,
+                    ul: device.ai_recommended_up_kbs ?? 0,
+                    wan:
+                      canEditWan && device.ai_recommended_wan
+                        ? device.ai_recommended_wan.toUpperCase()
+                        : undefined,
+                  })
+                }
+                className="shrink-0 inline-flex items-center justify-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-medium transition disabled:opacity-50"
+                style={{
+                  background: 'rgba(91,141,239,.14)',
+                  color: '#8bb2ff',
+                  boxShadow: 'inset 0 0 0 1px rgba(91,141,239,.35)',
+                }}
+              >
+                {saving ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                <span>
+                  تطبيق التوصية (
+                  <bdi>
+                    {device.ai_recommended_down_kbs === 0
+                      ? 'Unlimited'
+                      : `↓ ${device.ai_recommended_down_kbs} KB/s`}
+                  </bdi>
+                  )
+                </span>
+              </button>
+            )}
         </div>
       )}
 

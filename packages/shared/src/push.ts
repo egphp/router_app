@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import crypto from 'node:crypto';
 import webpush from 'web-push';
+import { deliverApns } from './apns.js';
 import {
   buildAlertSuppressionKey,
   isNotificationEnabled,
@@ -533,9 +534,6 @@ export async function sendPushToAll(
     return { sent: 0, failed: 0, expired: 0, skipped: 1 };
   }
 
-  const keys = ensureVapidKeys(db);
-  webpush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-
   const now = Date.now();
   const rows = db.prepare(
     `SELECT endpoint, p256dh, auth, expiration_time
@@ -544,8 +542,13 @@ export async function sendPushToAll(
        AND (expiration_time IS NULL OR expiration_time = 0 OR expiration_time > ?)`,
   ).all(now) as PushSubscriptionRow[];
 
-  if (rows.length === 0) return { sent: 0, failed: 0, expired: 0, skipped: 0 };
+  let sent = 0;
+  let failed = 0;
+  let expired = 0;
 
+  if (rows.length > 0) {
+  const keys = ensureVapidKeys(db);
+  webpush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
   const body = JSON.stringify({
     title: payload.title,
     body: payload.body,
@@ -554,10 +557,6 @@ export async function sendPushToAll(
     icon: cleanAssetUrl(payload.icon) || '/icon-192.png',
     image: cleanAssetUrl(payload.image),
   });
-
-  let sent = 0;
-  let failed = 0;
-  let expired = 0;
 
   for (const row of rows) {
     const endpointHash = hashEndpoint(row.endpoint);
@@ -600,8 +599,10 @@ export async function sendPushToAll(
       }
     }
   }
+  }
 
-  return { sent, failed, expired, skipped: 0 };
+  const apns = await deliverApns(db, payload);
+  return { sent: sent + apns.sent, failed: failed + apns.failed, expired, skipped: 0 };
 }
 
 function normalizeSubscription(input: PushSubscriptionInput): (

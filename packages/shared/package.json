@@ -7,36 +7,49 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "dev-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./db": {
+      "dev-source": "./src/db.ts",
       "types": "./dist/db.d.ts",
       "default": "./dist/db.js"
     },
     "./types": {
+      "dev-source": "./src/types.ts",
       "types": "./dist/types.d.ts",
       "default": "./dist/types.js"
     },
     "./oui": {
+      "dev-source": "./src/oui.ts",
       "types": "./dist/oui.d.ts",
       "default": "./dist/oui.js"
     },
     "./time": {
+      "dev-source": "./src/time.ts",
       "types": "./dist/time.d.ts",
       "default": "./dist/time.js"
     },
     "./push": {
+      "dev-source": "./src/push.ts",
       "types": "./dist/push.d.ts",
       "default": "./dist/push.js"
+    },
+    "./ai": {
+      "dev-source": "./src/ai/index.ts",
+      "types": "./dist/ai/index.d.ts",
+      "default": "./dist/ai/index.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && rm -rf dist/migrations && mkdir -p dist/migrations && cp src/migrations/*.sql dist/migrations/",
     "dev": "tsc -p tsconfig.json --watch",
-    "migrate": "node dist/migrate.js"
+    "migrate": "node dist/migrate.js",
+    "test": "node --import ../poller/node_modules/tsx/dist/loader.mjs --test test/*.test.ts"
   },
   "dependencies": {
+    "@google/genai": "^3.3.0",
     "better-sqlite3": "^11.7.0",
     "dotenv": "^16.4.7",
     "web-push": "^3.6.7"

@@ -5,6 +5,7 @@ import { fetcher } from '../../lib/fetcher';
 import { formatDuration, timeAgo } from '../../lib/format';
 import { useTableSort, sortNum, sortStr, SortHeader } from '../../lib/useTableSort';
 import { clsx } from 'clsx';
+import { AskGeminiButton } from '../../components/AskGeminiButton';
 
 interface Outage {
   started_at: number; ended_at: number | null; reason: string; notes: string | null;
@@ -74,6 +75,20 @@ export default function OutagesPage() {
                   <div className="break-words text-slate-500">{o.notes || '—'}</div>
                 </div>
               </div>
+              <div className="mt-2">
+                <AskGeminiButton
+                  compact
+                  scopeType="outage"
+                  scopeKey={`outage-${o.started_at}`}
+                  contextPayload={{
+                    started_at: o.started_at,
+                    ended_at: o.ended_at,
+                    duration_sec: Math.round(((o.ended_at ?? Date.now()) - o.started_at) / 1000),
+                    reason: o.reason,
+                    notes: o.notes,
+                  }}
+                />
+              </div>
             </article>
           ))}
           {sorted.length === 0 && <div className="px-4 py-8 text-center text-slate-500">No outages recorded yet.</div>}
@@ -86,6 +101,7 @@ export default function OutagesPage() {
                 <SortHeader label="Duration" k="duration" sort={sort} onSort={onSort} indicator={indicator} align="left" />
                 <SortHeader label="Reason" k="reason" sort={sort} onSort={onSort} indicator={indicator} align="left" defaultDir="asc" />
                 <th className="px-4 py-2 text-left">Notes</th>
+                <th className="px-4 py-2 text-left">AI Forensics</th>
               </tr>
             </thead>
             <tbody>
@@ -102,10 +118,24 @@ export default function OutagesPage() {
                     <span className="text-xs bg-bg-elevated rounded px-2 py-1 border border-bg-border">{o.reason}</span>
                   </td>
                   <td className="px-4 py-2.5 text-xs text-slate-500 max-w-md truncate">{o.notes || '—'}</td>
+                  <td className="px-4 py-2.5">
+                    <AskGeminiButton
+                      compact
+                      scopeType="outage"
+                      scopeKey={`outage-${o.started_at}`}
+                      contextPayload={{
+                        started_at: o.started_at,
+                        ended_at: o.ended_at,
+                        duration_sec: Math.round(((o.ended_at ?? Date.now()) - o.started_at) / 1000),
+                        reason: o.reason,
+                        notes: o.notes,
+                      }}
+                    />
+                  </td>
                 </tr>
               ))}
               {sorted.length === 0 && (
-                <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No outages recorded yet.</td></tr>
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">No outages recorded yet.</td></tr>
               )}
             </tbody>
           </table>

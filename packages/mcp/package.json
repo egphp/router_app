@@ -1,0 +1,37 @@
+{
+  "name": "@tenda/mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local MCP server (stdio + optional Streamable HTTP) for Tenda Router Monitor telemetry, diagnostics, and safe controls",
+  "type": "module",
+  "bin": {
+    "tenda-mcp-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch --conditions=dev-source src/index.ts",
+    "smoke": "node --conditions=dev-source --import ./node_modules/tsx/dist/loader.mjs scripts/smoke.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/express": "^2.0.2",
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "@tenda/shared": "workspace:*",
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -5,6 +5,18 @@ import { fetcher } from '../../lib/fetcher';
 import { Shield, AlertTriangle, RefreshCw, FileText, Wifi, ChevronDown, ChevronRight } from 'lucide-react';
 import { formatMacShort, timeAgo } from '../../lib/format';
 import { AffectedDeviceList, type AffectedDevice } from '../../components/SecurityFindingDetails';
+import { AskGeminiButton } from '../../components/AskGeminiButton';
+
+interface SyslogClusterItem {
+  cluster_key: string;
+  template: string;
+  severity: string;
+  sample_message: string;
+  count_total: number;
+  last_seen_at: number;
+  ai_summary_ar: string | null;
+  ai_remediation_ar: string | null;
+}
 
 interface Alert {
   id: number; kind: string; mac: string | null; payload: string | null;
@@ -19,6 +31,10 @@ export default function SecurityPage() {
   const { data: log, mutate: refreshLog, isValidating } = useSWR<{ lines: LogLine[] }>(
     '/api/router-log?limit=500', fetcher, { refreshInterval: 30000 }
   );
+  const { data: advisory } = useSWR<{ syslogClusters?: SyslogClusterItem[] }>(
+    '/api/ai/advisory', fetcher, { refreshInterval: 45000 }
+  );
+  const syslogClusters = advisory?.syslogClusters ?? [];
 
   const securityAlerts = useMemo(() =>
     (alerts?.alerts ?? []).filter((a) => a.kind === 'security' && !a.dismissed_at),
@@ -84,6 +100,8 @@ export default function SecurityPage() {
           <Rule name="high_upload" desc="Device sustaining 5+ MB/s outbound (data exfiltration, botnet, backup)." />
           <Rule name="hostname_clones" desc="3+ devices broadcasting the same hostname (impersonation)." />
           <Rule name="out_of_subnet" desc="Device reports IP outside the LAN subnet (misconfig or routing attack)." />
+          <Rule name="camera_external_upload" desc="IP camera uploading onto WAN internet instead of LAN-only NVR (Frigate)." />
+          <Rule name="ip_mac_churn" desc="Single LAN IP claimed by 3+ distinct MAC addresses within 1 hour (DHCP exhaustion or ARP spoofing)." />
           <Rule name="random_mac_device" desc="Device uses a randomized/locally-administered MAC address (normal for modern phones; one info finding per device, dismiss to silence)." />
         </ul>
       </div>
@@ -130,6 +148,50 @@ export default function SecurityPage() {
           </div>
         )}
       </div>
+
+      {syslogClusters.length > 0 && (
+        <div className="card p-5 animate-fade-in space-y-3" dir="rtl">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h2 className="font-semibold text-sm" style={{ color: '#f7f8f8' }}>
+              تجميع الأنماط المتكررة لسجلات الراوتر (<bdi>Syslog Semantic Clusters</bdi>)
+            </h2>
+            <span className="text-xs tabular-nums" style={{ color: 'rgba(180,188,208,.65)' }}>
+              {syslogClusters.length} نمط مجمّع
+            </span>
+          </div>
+          <div className="space-y-2">
+            {syslogClusters.slice(0, 12).map((c) => (
+              <div
+                key={c.cluster_key}
+                className="rounded-xl p-3 space-y-1.5"
+                style={{ background: '#111114', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.06)' }}
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-xs font-mono" dir="ltr" style={{ color: '#8bb2ff' }}>
+                    {c.template}
+                  </span>
+                  <span
+                    className="rounded px-2 py-0.5 text-[11px] font-medium tabular-nums"
+                    style={{
+                      background: 'rgba(255,255,255,.05)',
+                      color: 'rgba(180,188,208,.85)',
+                      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.10)',
+                    }}
+                  >
+                    تكرر {c.count_total} مرة
+                  </span>
+                </div>
+                {c.ai_summary_ar && (
+                  <div className="text-xs" style={{ color: 'rgba(247,248,248,.9)', lineHeight: 1.6 }}>
+                    {c.ai_summary_ar}
+                    {c.ai_remediation_ar ? ` — ${c.ai_remediation_ar}` : ''}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card p-5 animate-fade-in">
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -272,7 +334,19 @@ function FindingDetails({ group }: { group: FindingGroup }) {
   }
 
   return (
-    <div className="px-3 pb-3">
+    <div className="px-3 pb-3 space-y-2.5">
+      <div>
+        <AskGeminiButton
+          compact
+          scopeType="security"
+          scopeKey={`sec-rule-${group.rule}-${group.latest}`}
+          contextPayload={{
+            rule: group.rule,
+            severity: group.severity,
+            entries: group.entries.slice(0, 8),
+          }}
+        />
+      </div>
       {devices.length === 0 ? (
         <div className="text-xs text-slate-500 italic">
           This finding has no device details (older format). Newer findings will list every MAC.

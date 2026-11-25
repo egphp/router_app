@@ -23,6 +23,7 @@ import {
   Link2,
   LogOut,
 } from 'lucide-react';
+import { AiSettingsAndSchedulesSection } from './AiSettingsAndSchedulesSection';
 
 interface Settings {
   routerHost: string;
@@ -200,6 +201,7 @@ export function SettingsClient() {
         </div>
       </div>
 
+      <AiSettingsAndSchedulesSection />
       <RemotePanelAccessCard />
       <PushTestCard />
       <NotificationSettingsCard />

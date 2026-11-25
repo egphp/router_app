@@ -1,6 +1,15 @@
 import type Database from 'better-sqlite3';
 import type { RouterDevice } from '@tenda/shared';
-import { insertAlertIfAllowed, lookupOui, isAic8800FallbackMac } from '@tenda/shared';
+import {
+  PiiSessionSanitizer,
+  correlateDeviceWindowLanOrWan,
+  insertAlertIfAllowed,
+  isAiReady,
+  isAic8800FallbackMac,
+  lookupOui,
+  resolveGeminiApiKey,
+  triageSecurityFinding,
+} from '@tenda/shared';
 import { log } from './logger.js';
 
 export interface SecurityCheck {
@@ -95,11 +104,36 @@ export class SecurityScanner {
       }
     }
 
-    // 2. Sudden high upload speed (potential exfiltration / outbound DDoS)
+    // 2. Sudden high upload speed (potential exfiltration / outbound DDoS) + role-aware IoT/Camera WAN upload check
     for (const d of onlineDevices) {
       // Tenda reports per-client speed as integer KB/s in the UI/API.
       const up = Math.round(Number(d.hostUploadSpeed ?? 0) * 1024);
+      const desc = describeDevice(d, reservedMacs);
+      const isRestrictedRole = desc.category === 'camera' || desc.category === 'iot' || desc.category === 'printer';
+
+      if (isRestrictedRole && up > 1.5 * 1024 * 1024) {
+        // Distinguish benign LAN camera -> Frigate NVR stream from actual external WAN upload!
+        const corr = correlateDeviceWindowLanOrWan(this.db, up * 30, now - 60_000, now);
+        if (corr.attribution !== 'lan_only') {
+          out.push({
+            rule: 'camera_external_upload',
+            severity: 'warn',
+            mac: d.hostMAC,
+            message: `${deviceLabel(d)} (${desc.category}) uploading externally at ${(up / 1024 / 1024).toFixed(1)} MB/s (${corr.attribution.toUpperCase()})`,
+            detail: {
+              up_bps: up,
+              up_human: `${(up / 1024 / 1024).toFixed(1)} MB/s`,
+              lan_or_wan: corr.attribution,
+              ...desc,
+            },
+          });
+          continue;
+        }
+      }
+
       if (up > 5 * 1024 * 1024) { // 5 MB/s sustained upload
+        const corr = correlateDeviceWindowLanOrWan(this.db, up * 30, now - 60_000, now);
+        if (isRestrictedRole && corr.attribution === 'lan_only') continue;
         out.push({
           rule: 'high_upload',
           severity: up > 20 * 1024 * 1024 ? 'critical' : 'warn',
@@ -108,10 +142,39 @@ export class SecurityScanner {
           detail: {
             up_bps: up,
             up_human: `${(up / 1024 / 1024).toFixed(1)} MB/s`,
-            ...describeDevice(d, reservedMacs),
+            lan_or_wan: corr.attribution,
+            ...desc,
           },
         });
       }
+    }
+
+    // 2b. Multi-MAC IP Churn (3+ distinct hardware MACs claiming the same LAN IP within 30 minutes)
+    try {
+      const churnRows = this.db
+        .prepare(`
+          SELECT ip, COUNT(DISTINCT mac) AS mac_cnt, GROUP_CONCAT(DISTINCT mac) AS macs_csv
+          FROM samples_raw
+          WHERE ts >= ? AND ip IS NOT NULL AND ip != '' AND mac NOT LIKE '88:00:33:77:%'
+          GROUP BY ip
+          HAVING mac_cnt >= 3
+        `)
+        .all(now - 30 * 60_000) as Array<{ ip: string; mac_cnt: number; macs_csv: string }>;
+      for (const ch of churnRows) {
+        out.push({
+          rule: 'ip_mac_churn',
+          severity: 'warn',
+          mac: null,
+          message: `LAN IP ${ch.ip} claimed by ${ch.mac_cnt} distinct MACs in 30 minutes`,
+          detail: {
+            ip: ch.ip,
+            count: ch.mac_cnt,
+            macs: ch.macs_csv ? ch.macs_csv.split(',') : [],
+          },
+        });
+      }
+    } catch {
+      // Optional in minimal test DBs
     }
 
     // 3. Locally-administered MAC = device with randomized/spoofed address.
@@ -226,5 +289,52 @@ export class SecurityScanner {
     }
 
     return inserted;
+  }
+
+  /**
+   * Calibrated false-positive & severity triage via `gemini-decision-1` (`v1beta`).
+   * Stores verdict into `ai_insights` so `/security` shows instant calibrated badges.
+   */
+  async triageFindingsWithAi(checks: SecurityCheck[], now = Date.now()): Promise<void> {
+    if (checks.length === 0 || !isAiReady(this.db, 'security')) return;
+    const { apiKey } = resolveGeminiApiKey(this.db);
+    if (!apiKey) return;
+
+    const hasInsights = this.db
+      .prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'ai_insights'`)
+      .get() as { ok: number } | undefined;
+    if (!hasInsights?.ok) return;
+
+    const sanitizer = new PiiSessionSanitizer(this.db);
+    for (const c of checks.slice(0, 5)) {
+      try {
+        const sanitized = sanitizer.sanitizeValue({
+          rule: c.rule,
+          severity: c.severity,
+          detail: c.detail ?? {},
+        });
+        const verdict = await triageSecurityFinding(apiKey, JSON.stringify(sanitized));
+        const scopeKey = `${c.rule}:${c.mac ?? 'network'}`;
+        this.db
+          .prepare(`
+            INSERT INTO ai_insights (
+              scope_type, scope_key, verdict, lan_or_wan, title_ar, explanation_ar, recommended_action_json, model_used, created_at
+            ) VALUES ('security_triage', ?, ?, ?, ?, ?, NULL, 'gemini-decision-1', ?)
+            ON CONFLICT(scope_type, scope_key) DO UPDATE SET
+              verdict = excluded.verdict,
+              created_at = excluded.created_at
+          `)
+          .run(
+            scopeKey,
+            verdict.verdict,
+            c.detail?.lan_or_wan ?? null,
+            verdict.verdict === 'benign' ? 'سلوك معتاد للجهاز' : 'يستحق المراجعة الأمنية',
+            `ثقة التصنيف المعاير: ${Math.round(verdict.confidence * 100)}%`,
+            now,
+          );
+      } catch (e) {
+        log.debug('security ai triage skipped', String(e));
+      }
+    }
   }
 }

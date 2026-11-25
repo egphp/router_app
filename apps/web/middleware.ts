@@ -164,6 +164,8 @@ function isPublicPath(pathname: string): boolean {
     pathname === '/api/auth/passkey/login/verify' ||
     pathname === '/api/auth/passkey/register/options' ||
     pathname === '/api/auth/passkey/register/verify' ||
-    pathname === '/api/auth/passkey/enroll-token'
+    pathname === '/api/auth/passkey/enroll-token' ||
+    pathname === '/api/auth/native/exchange' ||
+    pathname === '/privacy'
   );
 }

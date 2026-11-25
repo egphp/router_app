@@ -6,10 +6,23 @@ import { fetcher } from '../lib/fetcher';
 import { formatBps } from '../lib/format';
 
 interface SpeedPoint { ts: number; down_bps: number; up_bps: number }
+interface WanLineLive { id: number; status: string; down_bps: number; up_bps: number }
 interface LiveSpeedResponse {
   speeds: SpeedPoint[];
   source?: 'router-best' | 'router-direct' | 'wan' | 'devices';
   latest_ts?: number | null;
+  direct?: {
+    wan_lines?: WanLineLive[];
+    wan_down_bps?: number;
+    wan_up_bps?: number;
+    lan_local_down_bps?: number;
+    lan_local_up_bps?: number;
+  };
+}
+
+function formatMbps(bytesPerSec: number): string {
+  const mbps = (Math.max(0, Number(bytesPerSec || 0)) * 8) / 1_000_000;
+  return mbps >= 10 ? `${mbps.toFixed(1)} Mbps` : `${mbps.toFixed(2)} Mbps`;
 }
 
 export function LiveSpeedChart() {
@@ -37,13 +50,15 @@ export function LiveSpeedChart() {
 
   const latest = speeds[speeds.length - 1] ?? null;
   const latestAgeSec = latest ? Math.max(0, Math.round((Date.now() - latest.ts) / 1000)) : null;
-  const sourceLabel = data?.source === 'router-direct'
+  const sourceLabel = data?.source === 'wan'
+    ? 'WAN1+WAN2 (إنترنت حقيقي)'
+    : data?.source === 'router-direct'
     ? 'Router live'
     : data?.source === 'devices'
     ? 'Devices'
-    : data?.source === 'wan'
-      ? 'WAN'
-      : 'Router best';
+    : 'Router best';
+  const wanLines = data?.direct?.wan_lines ?? [];
+  const lanLocalBps = Math.max(data?.direct?.lan_local_down_bps ?? 0, data?.direct?.lan_local_up_bps ?? 0);
   const isFresh = latestAgeSec !== null && latestAgeSec <= 25;
   const isStale = data?.speeds.length === 0 && lastGood.current.length === 0;
   const errored = !!error && rows.length === 0;
@@ -62,16 +77,47 @@ export function LiveSpeedChart() {
         <div className="flex items-center justify-end gap-2 text-[10px] sm:text-[11px] shrink-0 flex-wrap">
           {latest && (
             <>
-              <span className="font-semibold text-blue-300">↓ {formatBps(latest.down_bps, 0)}</span>
-              <span className="font-semibold text-orange-300">↑ {formatBps(latest.up_bps, 0)}</span>
+              <span className="font-semibold text-blue-300 tabular-nums" title={formatMbps(latest.down_bps)}>
+                <bdi>↓ {formatBps(latest.down_bps, 0)} ({formatMbps(latest.down_bps)})</bdi>
+              </span>
+              <span className="font-semibold text-orange-300 tabular-nums" title={formatMbps(latest.up_bps)}>
+                <bdi>↑ {formatBps(latest.up_bps, 0)} ({formatMbps(latest.up_bps)})</bdi>
+              </span>
               <span className={isFresh ? 'text-accent-green' : 'text-accent-amber'}>
-                {sourceLabel} · {latestAgeSec}s
+                <bdi>{sourceLabel} · {latestAgeSec}s</bdi>
               </span>
             </>
           )}
           {!latest && <span className="text-slate-500">{sourceLabel}</span>}
         </div>
       </div>
+      {(wanLines.length > 0 || lanLocalBps > 32 * 1024) && (
+        <div className="flex items-center gap-2 flex-wrap mb-2 text-[11px] text-slate-400 tabular-nums">
+          {wanLines.map((w) => (
+            <span
+              key={w.id}
+              className="rounded px-2 py-0.5 bg-bg-elevated/80"
+              style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.06)' }}
+            >
+              <bdi>
+                WAN{w.id}: ↓ {formatBps(w.down_bps, 0)} · ↑ {formatBps(w.up_bps, 0)}
+              </bdi>
+            </span>
+          ))}
+          {lanLocalBps > 32 * 1024 && (
+            <span
+              className="rounded px-2 py-0.5 text-slate-300"
+              style={{
+                background: 'rgba(91,141,239,.09)',
+                boxShadow: 'inset 0 0 0 1px rgba(91,141,239,.25)',
+              }}
+              title="حركة داخلية بين الأجهزة والكاميرات لا تُخصم من باقة الإنترنت"
+            >
+              <bdi>حركة داخلية (LAN / كاميرات): {formatBps(lanLocalBps, 0)}</bdi>
+            </span>
+          )}
+        </div>
+      )}
       <div className="flex-1 min-h-[80px]">
         {errored ? (
           <div className="h-full flex items-center justify-center text-slate-500 text-sm">

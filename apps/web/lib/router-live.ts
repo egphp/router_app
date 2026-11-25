@@ -25,16 +25,27 @@ export interface RouterLiveDevice {
   upload_limit_kbs: number;
 }
 
+export interface RouterLiveWanLine {
+  id: number;
+  status: string;
+  down_bps: number;
+  up_bps: number;
+}
+
 export interface RouterLiveSnapshot {
   ts: number;
   source: 'router-direct';
   devices: RouterLiveDevice[];
   all_hosts_limits: Map<string, { download_limit_kbs: number; upload_limit_kbs: number }>;
+  wan_lines: RouterLiveWanLine[];
+  has_active_wan: boolean;
   all_devices_down_bps: number;
   all_devices_up_bps: number;
   counter_down_bps: number;
   wan_down_bps: number;
   wan_up_bps: number;
+  lan_local_down_bps: number;
+  lan_local_up_bps: number;
   best_down_bps: number;
   best_up_bps: number;
 }
@@ -141,28 +152,35 @@ class RouterLiveClient {
       getQosUserList: { type: 1 },
     });
 
-    const networkWan = sumWanFlux(res.getNetwork);
-    const infoWan = sumWanFlux(res.getWanInfo);
-    const wanDown = Math.max(networkWan.down, infoWan.down);
-    const wanUp = Math.max(networkWan.up, infoWan.up);
+    const wanLines = parseWanLines(res.getWanInfo, res.getNetwork);
+    const hasActiveWan = wanLines.length > 0;
+    const wanDown = wanLines.reduce((s, w) => s + w.down_bps, 0);
+    const wanUp = wanLines.reduce((s, w) => s + w.up_bps, 0);
     const devices = normalizeDevices(res.getQosUserList);
     const allHostsLimits = extractAllHostLimits(res.getQosUserList);
     const allDown = devices.reduce((sum, d) => sum + d.down_speed_bps, 0);
     const allUp = devices.reduce((sum, d) => sum + d.up_speed_bps, 0);
     const counterDown = this.counterDownBps(ts, devices);
+    const lanLocalDown = hasActiveWan ? Math.max(0, allDown - wanDown) : 0;
+    const lanLocalUp = hasActiveWan ? Math.max(0, allUp - wanUp) : 0;
 
     return {
       ts,
       source: 'router-direct',
       devices,
       all_hosts_limits: allHostsLimits,
+      wan_lines: wanLines,
+      has_active_wan: hasActiveWan,
       all_devices_down_bps: allDown,
       all_devices_up_bps: allUp,
       counter_down_bps: counterDown,
       wan_down_bps: wanDown,
       wan_up_bps: wanUp,
-      best_down_bps: Math.max(wanDown, allDown, counterDown),
-      best_up_bps: Math.max(wanUp, allUp),
+      lan_local_down_bps: lanLocalDown,
+      lan_local_up_bps: lanLocalUp,
+      // Authoritative WAN internet speed when WAN ports are up; fall back to device sum only if WAN is absent
+      best_down_bps: hasActiveWan ? wanDown : Math.max(allDown, counterDown),
+      best_up_bps: hasActiveWan ? wanUp : allUp,
     };
   }
 
@@ -334,16 +352,31 @@ function speedKbToBps(value: unknown): number {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 1024) : 0;
 }
 
-function sumWanFlux(rows: Array<Record<string, unknown>> | undefined): { down: number; up: number } {
-  let down = 0;
-  let up = 0;
-  for (const row of Array.isArray(rows) ? rows : []) {
-    const status = String(row.wanStatus ?? '').toLowerCase();
-    if (status && status !== 'wired' && status !== 'connected') continue;
-    down += parseFluxString(row.wanDownFlux);
-    up += parseFluxString(row.wanUpFlux);
-  }
-  return { down, up };
+function parseWanLines(
+  wanInfoRows: Array<Record<string, unknown>> | undefined,
+  networkRows: Array<Record<string, unknown>> | undefined,
+): RouterLiveWanLine[] {
+  const byId = new Map<number, RouterLiveWanLine>();
+  const ingest = (rows: Array<Record<string, unknown>> | undefined) => {
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const id = Number(row.ID ?? 0);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      const status = String(row.wanStatus ?? '').toLowerCase();
+      if (status && status !== 'wired' && status !== 'connected') continue;
+      const down = parseFluxString(row.wanDownFlux);
+      const up = parseFluxString(row.wanUpFlux);
+      const prev = byId.get(id);
+      if (!prev) {
+        byId.set(id, { id, status: status || 'connected', down_bps: down, up_bps: up });
+      } else {
+        prev.down_bps = Math.max(prev.down_bps, down);
+        prev.up_bps = Math.max(prev.up_bps, up);
+      }
+    }
+  };
+  ingest(wanInfoRows);
+  ingest(networkRows);
+  return [...byId.values()].sort((a, b) => a.id - b.id);
 }
 
 function parseFluxString(value: unknown): number {

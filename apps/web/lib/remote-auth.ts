@@ -811,11 +811,11 @@ export function applySecurityHeaders(res: NextResponse, req?: Request | NextRequ
   res.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
   res.headers.set(
     'Permissions-Policy',
-    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), publickey-credentials-get=(self), publickey-credentials-create=(self)',
+    'camera=(), microphone=(self), geolocation=(), payment=(), usb=(), publickey-credentials-get=(self), publickey-credentials-create=(self)',
   );
   res.headers.set(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   );
   if (req && secureCookieForRequest(req)) {
     res.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
