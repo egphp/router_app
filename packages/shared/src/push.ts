@@ -400,7 +400,7 @@ export function buildNewDevicePushPayload(device: NewDevicePushInput): PushPaylo
     body: details.join(' • '),
     url: `/devices/${encodeURIComponent(mac)}`,
     tag: `new-device-${mac}`,
-    icon: '/icon-192.png',
+    icon: '/icon-192.png?v=20261127a',
   };
 }
 
@@ -433,7 +433,7 @@ export function buildNsfwPushPayload(db: Database.Database, hit: NsfwPushInput):
     body: `${label} • ${domain} (${category}) • ${identity}`,
     url: location,
     tag: `nsfw-${mac || ip || 'unknown'}-${domain}`,
-    icon: '/icon-192.png',
+    icon: '/icon-192.png?v=20261127a',
     image: undefined,
   };
 }
@@ -451,7 +451,7 @@ export async function sendSecurityPush(
     body: [label, trimText(input.message, 140), input.ip ? `IP ${trimText(input.ip, 80)}` : '', rule].filter(Boolean).join(' • '),
     url: mac ? `/devices/${encodeURIComponent(mac)}` : '/security',
     tag: `security-${rule}-${mac || 'network'}`,
-    icon: '/icon-192.png',
+    icon: '/icon-192.png?v=20261127a',
   }, {
     notificationType: 'security',
     suppressionKey: buildAlertSuppressionKey('security', mac || null, { rule }),
@@ -471,7 +471,7 @@ export async function sendAttackPush(
     body: [label, kind, count > 0 ? `${count} events` : '', trimText(input.message, 140)].filter(Boolean).join(' • '),
     url: mac ? `/devices/${encodeURIComponent(mac)}` : '/attacks',
     tag: `attack-${kind}-${mac || input.ip || 'unknown'}`,
-    icon: '/icon-192.png',
+    icon: '/icon-192.png?v=20261127a',
   }, {
     notificationType: 'attack',
     suppressionKey: buildAlertSuppressionKey('attack', mac || null, { kind, attacker_mac: mac }),
@@ -489,14 +489,14 @@ export async function sendOutagePush(
         body: `Uptime reset${input.uptimeBefore ? ` • before ${Math.round(input.uptimeBefore / 60)}m` : ''}${input.uptimeAfter ? ` • after ${Math.round(input.uptimeAfter / 60)}m` : ''}`,
         url: '/outages',
         tag: 'router-reboot',
-        icon: '/icon-192.png',
+        icon: '/icon-192.png?v=20261127a',
       }
     : {
         title: 'انقطاع في الراوتر',
         body: [trimText(input.reason, 80) || 'unreachable', trimText(input.notes, 140)].filter(Boolean).join(' • '),
         url: '/outages',
         tag: `router-outage-${trimText(input.reason, 80) || 'unreachable'}`,
-        icon: '/icon-192.png',
+        icon: '/icon-192.png?v=20261127a',
       };
   return sendPushToAll(db, payload, {
     notificationType: isReboot ? 'reboot' : 'outage',
@@ -515,7 +515,7 @@ export async function sendDownloadThresholdPush(
     body: `${label} • ${trimText(input.period, 40)} • ${formatBytesForPush(input.bytes)} / ${formatBytesForPush(input.thresholdBytes)}`,
     url: mac ? `/devices/${encodeURIComponent(mac)}` : '/analytics',
     tag: `${input.kind}-${trimText(input.period, 40)}-${mac || 'all'}`,
-    icon: '/icon-192.png',
+    icon: '/icon-192.png?v=20261127a',
   }, {
     notificationType: input.kind,
     suppressionKey: buildAlertSuppressionKey(input.kind, mac || null, { period: input.period }),
@@ -554,7 +554,7 @@ export async function sendPushToAll(
     body: payload.body,
     url: cleanPushUrl(payload.url),
     tag: payload.tag || 'tenda-monitor',
-    icon: cleanAssetUrl(payload.icon) || '/icon-192.png',
+    icon: cleanAssetUrl(payload.icon) || '/icon-192.png?v=20261127a',
     image: cleanAssetUrl(payload.image),
   });
 

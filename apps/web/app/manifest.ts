@@ -10,11 +10,11 @@ export default function manifest(): MetadataRoute.Manifest {
     background_color: '#13162a',
     theme_color: '#13162a',
     icons: [
-      { src: '/icon-192.png?v=20261125f', sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: '/icon-256.png?v=20261125f', sizes: '256x256', type: 'image/png', purpose: 'any' },
-      { src: '/icon-384.png?v=20261125f', sizes: '384x384', type: 'image/png', purpose: 'any' },
-      { src: '/icon-512.png?v=20261125f', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      { src: '/icon-512.png?v=20261125f', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      { src: '/icon-192.png?v=20261127a', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/icon-256.png?v=20261127a', sizes: '256x256', type: 'image/png', purpose: 'any' },
+      { src: '/icon-384.png?v=20261127a', sizes: '384x384', type: 'image/png', purpose: 'any' },
+      { src: '/icon-512.png?v=20261127a', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/icon-512.png?v=20261127a', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   };
 }

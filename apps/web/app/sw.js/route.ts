@@ -17,7 +17,7 @@ function serviceWorkerSource(version: string): string {
   return `
 const SW_VERSION = ${JSON.stringify(version)};
 const CACHE_PREFIX = 'tenda-v';
-const ASSETS_CACHE = CACHE_PREFIX + 'assets-mark-2';
+const ASSETS_CACHE = CACHE_PREFIX + 'assets-mark-3';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -69,8 +69,8 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'Tenda Monitor';
   const options = {
     body: data.body || '',
-    icon: data.icon || '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: data.icon || '/icon-192.png?v=20261127a',
+    badge: '/icon-192.png?v=20261127a',
     tag: data.tag || 'tenda-monitor',
     data: { url: cleanUrl(data.url || '/') },
   };

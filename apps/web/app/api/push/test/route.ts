@@ -14,7 +14,7 @@ export async function POST(req: Request) {
     body: 'التنبيهات شغالة على لوحة Tenda Monitor.',
     url: '/alerts',
     tag: 'tenda-test',
-    icon: '/icon-192.png',
+    icon: '/icon-192.png?v=20261127a',
   });
   return NextResponse.json({ ok: true, ...result });
 }
